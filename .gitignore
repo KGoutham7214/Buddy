@@ -1,0 +1,41 @@
+# Dependencies & build
+node_modules/
+dist/
+out/
+release/
+build/
+
+# Logs & caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.cache/
+.vite/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Electron
+*.asar
+*.dmg
+*.exe
+*.AppImage
+
+# Local / temp
+tmp/
+temp/
+*.local
