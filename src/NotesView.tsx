@@ -1,11 +1,7 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent,
-} from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Note, Task } from "./vite-env";
-import { IconCheck, IconPlus, IconTrash } from "./icons";
+import TaskList from "./TaskList";
+import { IconPlus, IconTrash } from "./icons";
 
 function formatDate(iso: string) {
   try {
@@ -33,20 +29,13 @@ export default function NotesView() {
 
   const noteTasks = useMemo(() => {
     if (!selectedId) return [];
-    const linked = tasks.filter((t) => t.noteId === selectedId);
-    const roots = linked
-      .filter((t) => !t.parentId)
-      .sort((a, b) => a.order - b.order);
-    return roots.map((root) => ({
-      root,
-      children: linked
-        .filter((t) => t.parentId === root.id)
-        .sort((a, b) => a.order - b.order),
-    }));
+    return tasks.filter((t) => t.noteId === selectedId);
   }, [tasks, selectedId]);
 
   async function refreshNotes(preferId?: string | null) {
-    const list = await window.buddy.listNotes();
+    const list = (await window.buddy.listNotes()).filter(
+      (n) => n.kind !== "meeting"
+    );
     setNotes(list);
     setSelectedId((current) => {
       if (preferId && list.some((n) => n.id === preferId)) return preferId;
@@ -135,6 +124,11 @@ export default function NotesView() {
     await refreshTasks();
   }
 
+  async function scheduleTask(task: Task, remindAt: string | null) {
+    await window.buddy.updateTask(task.id, { remindAt });
+    await refreshTasks();
+  }
+
   return (
     <div className="content">
       <div className="toolbar">
@@ -217,35 +211,15 @@ export default function NotesView() {
                   </button>
                 </form>
 
-                <div className="task-list embedded">
-                  {noteTasks.length === 0 ? (
-                    <div className="empty-hint tight">
-                      No tasks in this note yet
-                    </div>
-                  ) : (
-                    noteTasks.map(({ root, children }) => (
-                      <div key={root.id}>
-                        <NoteTaskRow
-                          task={root}
-                          onToggle={() => void toggleTask(root)}
-                          onRename={(title) => void renameTask(root, title)}
-                          onAddChild={() => void addSubtask(root.id)}
-                          onDelete={() => void removeTask(root.id)}
-                        />
-                        {children.map((child) => (
-                          <NoteTaskRow
-                            key={child.id}
-                            task={child}
-                            child
-                            onToggle={() => void toggleTask(child)}
-                            onRename={(title) => void renameTask(child, title)}
-                            onDelete={() => void removeTask(child.id)}
-                          />
-                        ))}
-                      </div>
-                    ))
-                  )}
-                </div>
+                <TaskList
+                  tasks={noteTasks}
+                  emptyText="No tasks in this note yet"
+                  onToggle={(task) => void toggleTask(task)}
+                  onRename={(task, title) => void renameTask(task, title)}
+                  onAddChild={(parentId) => void addSubtask(parentId)}
+                  onDelete={(id) => void removeTask(id)}
+                  onSchedule={(task, remindAt) => void scheduleTask(task, remindAt)}
+                />
               </div>
 
               <div className="editor-footer">
@@ -259,67 +233,6 @@ export default function NotesView() {
             </>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function NoteTaskRow({
-  task,
-  child,
-  onToggle,
-  onRename,
-  onAddChild,
-  onDelete,
-}: {
-  task: Task;
-  child?: boolean;
-  onToggle: () => void;
-  onRename: (title: string) => void;
-  onAddChild?: () => void;
-  onDelete: () => void;
-}) {
-  const [title, setTitle] = useState(task.title);
-
-  useEffect(() => {
-    setTitle(task.title);
-  }, [task.title]);
-
-  return (
-    <div
-      className={`task-row ${child ? "child" : ""} ${task.done ? "done" : ""}`}
-    >
-      <button
-        className={`checkbox ${task.done ? "checked" : ""}`}
-        onClick={onToggle}
-        aria-label={task.done ? "Mark incomplete" : "Mark complete"}
-      >
-        <IconCheck />
-      </button>
-      <input
-        className="task-title"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onBlur={() => onRename(title)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            (e.target as HTMLInputElement).blur();
-          }
-        }}
-      />
-      <div className="task-actions">
-        {onAddChild ? (
-          <button
-            className="tiny-btn"
-            title="Add subtask"
-            onClick={onAddChild}
-          >
-            <IconPlus />
-          </button>
-        ) : null}
-        <button className="tiny-btn danger" title="Delete" onClick={onDelete}>
-          <IconTrash />
-        </button>
       </div>
     </div>
   );

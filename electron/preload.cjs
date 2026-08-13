@@ -18,9 +18,34 @@ contextBridge.exposeInMainWorld("buddy", {
   updateTask: (id, payload) => ipcRenderer.invoke("tasks:update", id, payload),
   deleteTask: (id) => ipcRenderer.invoke("tasks:delete", id),
 
+  getDesktopSource: () => ipcRenderer.invoke("meeting:desktopSource"),
+  checkMeetingDeps: () => ipcRenderer.invoke("meeting:checkDeps"),
+  processMeeting: (payload) => ipcRenderer.invoke("meeting:process", payload),
+  setRecording: (active) => ipcRenderer.invoke("app:setRecording", active),
+
+  listPendingReminders: () => ipcRenderer.invoke("reminders:pending"),
+  markReminderShown: (id) => ipcRenderer.invoke("reminders:markShown", id),
+  dismissReminder: (id) => ipcRenderer.invoke("reminders:dismiss", id),
+  snoozeReminder: (id, hours) =>
+    ipcRenderer.invoke("reminders:snooze", id, hours),
+  setReminderBubble: (active) =>
+    ipcRenderer.invoke("reminders:setBubble", active),
+
   onModeChange: (callback) => {
     const handler = (_event, mode) => callback(mode);
     ipcRenderer.on("app:mode", handler);
     return () => ipcRenderer.removeListener("app:mode", handler);
+  },
+
+  onMeetingProgress: (callback) => {
+    const handler = (_event, message) => callback(message);
+    ipcRenderer.on("meeting:progress", handler);
+    return () => ipcRenderer.removeListener("meeting:progress", handler);
+  },
+
+  onReminderDue: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("reminders:due", handler);
+    return () => ipcRenderer.removeListener("reminders:due", handler);
   },
 });

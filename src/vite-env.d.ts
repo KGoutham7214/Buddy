@@ -4,6 +4,12 @@ export type Note = {
   id: string;
   title: string;
   body: string;
+  kind?: "note" | "meeting";
+  transcript?: string;
+  summary?: string;
+  keyPoints?: string[];
+  decisions?: string[];
+  audioPath?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -14,9 +20,40 @@ export type Task = {
   done: boolean;
   parentId: string | null;
   noteId: string | null;
+  remindAt?: string | null;
   order: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ReminderAction =
+  | { type: "dismiss" }
+  | { type: "snooze" }
+  | { type: "open-notes" }
+  | { type: "open-meet" };
+
+export type ReminderActionButton = {
+  label: string;
+  action: ReminderAction;
+  style?: "primary" | "ghost";
+};
+
+export type ReminderDef = {
+  id: string;
+  frequency: "daily" | "once" | "always";
+  speaker: string;
+  lines: string[];
+  stamp?: string;
+  actions?: ReminderActionButton[];
+};
+
+export type PendingReminderRef = {
+  id: string;
+  kind?: "catalog" | "task";
+  frequency: string;
+  dayKey: string;
+  taskId?: string;
+  title?: string;
 };
 
 export type AppMode = "icon" | "panel";
@@ -31,10 +68,28 @@ export type BuddyApi = {
   dragMove: (payload: { screenX: number; screenY: number }) => void;
   dragEnd: () => void;
   listNotes: () => Promise<Note[]>;
-  createNote: (payload?: { title?: string; body?: string }) => Promise<Note>;
+  createNote: (payload?: {
+    title?: string;
+    body?: string;
+    kind?: "note" | "meeting";
+    transcript?: string;
+    summary?: string;
+    keyPoints?: string[];
+    decisions?: string[];
+    audioPath?: string | null;
+  }) => Promise<Note>;
   updateNote: (
     id: string,
-    payload: { title?: string; body?: string }
+    payload: {
+      title?: string;
+      body?: string;
+      transcript?: string;
+      summary?: string;
+      keyPoints?: string[];
+      decisions?: string[];
+      audioPath?: string | null;
+      kind?: "note" | "meeting";
+    }
   ) => Promise<Note | null>;
   deleteNote: (id: string) => Promise<boolean>;
   listTasks: () => Promise<Task[]>;
@@ -47,11 +102,34 @@ export type BuddyApi = {
   updateTask: (
     id: string,
     payload: Partial<
-      Pick<Task, "title" | "done" | "parentId" | "noteId" | "order">
+      Pick<Task, "title" | "done" | "parentId" | "noteId" | "order" | "remindAt">
     >
   ) => Promise<Task | null>;
   deleteTask: (id: string) => Promise<boolean>;
+  getDesktopSource: () => Promise<string | null>;
+  checkMeetingDeps: () => Promise<{
+    whisper: { ok: boolean; error?: string };
+    ollama: { ok: boolean; error?: string; models?: string[] };
+  }>;
+  processMeeting: (payload: {
+    buffer: Uint8Array;
+    mimeType?: string;
+  }) => Promise<{
+    ok: boolean;
+    noteId?: string;
+    note?: Note;
+    error?: string;
+    aiError?: string | null;
+  }>;
+  setRecording: (active: boolean) => Promise<boolean>;
+  listPendingReminders: () => Promise<PendingReminderRef[]>;
+  markReminderShown: (id: string) => Promise<unknown>;
+  dismissReminder: (id: string) => Promise<unknown>;
+  snoozeReminder: (id: string, hours?: number) => Promise<unknown>;
+  setReminderBubble: (active: boolean) => Promise<boolean>;
   onModeChange: (callback: (mode: AppMode) => void) => () => void;
+  onMeetingProgress: (callback: (message: string) => void) => () => void;
+  onReminderDue: (callback: () => void) => () => void;
 };
 
 declare global {
