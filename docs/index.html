@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Buddy: a simple overview</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 18mm 16mm;
+    }
+
+    :root {
+      --ink: #1f1c18;
+      --muted: #5c564e;
+      --line: #d8d0c4;
+      --sand: #c4a574;
+      --sand-soft: #f4efe6;
+      --paper: #fffdf9;
+      --pad: clamp(1rem, 4.5vw, 1.75rem);
+      --sheet-max: 42rem;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #eae4da;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.55;
+      font-size: clamp(15px, 2.8vw, 17px);
+      padding:
+        max(0.75rem, env(safe-area-inset-top))
+        max(0.75rem, env(safe-area-inset-right))
+        max(1rem, env(safe-area-inset-bottom))
+        max(0.75rem, env(safe-area-inset-left));
+    }
+
+    .sheet {
+      width: 100%;
+      max-width: var(--sheet-max);
+      margin: 0 auto;
+      background: var(--paper);
+      padding: clamp(1.25rem, 5vw, 2.25rem);
+      border-radius: 14px;
+      box-shadow: 0 8px 28px rgba(40, 30, 10, 0.12);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    h1 {
+      margin: 0 0 0.35rem;
+      font-size: clamp(1.75rem, 7vw, 2.35rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      line-height: 1.15;
+    }
+
+    .tagline {
+      margin: 0;
+      font-size: clamp(0.95rem, 3.4vw, 1.05rem);
+      color: var(--muted);
+      max-width: 38em;
+    }
+
+    .brand-bar {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+      margin-bottom: 1rem;
+      padding-bottom: 0.9rem;
+      border-bottom: 2px solid var(--sand);
+    }
+
+    .brand-bar > div {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .dot {
+      width: 1.75rem;
+      height: 1.75rem;
+      margin-top: 0.2rem;
+      border-radius: 0.5rem;
+      background: linear-gradient(145deg, #ddbd8b, var(--sand));
+      border: 1px solid #a88755;
+      flex: 0 0 auto;
+    }
+
+    h2 {
+      margin: 1.35rem 0 0.55rem;
+      font-size: clamp(1.05rem, 4vw, 1.2rem);
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.25;
+      page-break-after: avoid;
+    }
+
+    p { margin: 0 0 0.75rem; }
+
+    ul {
+      margin: 0 0 0.9rem;
+      padding-left: 1.2em;
+    }
+
+    li { margin-bottom: 0.45rem; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+      margin: 0.75rem 0 0.35rem;
+    }
+
+    .card {
+      background: var(--sand-soft);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.9rem 1rem;
+      page-break-inside: avoid;
+    }
+
+    .card h3 {
+      margin: 0 0 0.4rem;
+      font-size: 1rem;
+      line-height: 1.3;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95em;
+    }
+
+    .steps {
+      counter-reset: step;
+      list-style: none;
+      padding: 0;
+      margin: 0.55rem 0 0.9rem;
+    }
+
+    .steps li {
+      position: relative;
+      padding-left: 2.15rem;
+      margin-bottom: 0.8rem;
+      page-break-inside: avoid;
+    }
+
+    .steps li::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0.05rem;
+      width: 1.45rem;
+      height: 1.45rem;
+      border-radius: 50%;
+      background: var(--sand);
+      color: #2a2218;
+      font-size: 0.8rem;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+    }
+
+    .callout {
+      border-left: 4px solid var(--sand);
+      background: var(--sand-soft);
+      padding: 0.85rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 10px 10px 0;
+      page-break-inside: avoid;
+    }
+
+    .footer {
+      margin-top: 1.25rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--line);
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 0.35rem 0.75rem;
+    }
+
+    .page-break {
+      margin-top: 1.5rem;
+      padding-top: 0.35rem;
+      border-top: 1px dashed var(--line);
+    }
+
+    .print-hint {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.45;
+      max-width: var(--sheet-max);
+      margin: 0 auto 0.85rem;
+      padding: 0 0.25rem;
+    }
+
+    @media (min-width: 640px) {
+      body {
+        padding: 1rem;
+      }
+
+      .sheet {
+        margin: 0.5rem auto;
+        padding: 1.75rem 2rem;
+      }
+
+      .two-col {
+        grid-template-columns: 1fr 1fr;
+        gap: 0.9rem 1.1rem;
+      }
+
+      .brand-bar {
+        align-items: center;
+      }
+
+      .dot {
+        margin-top: 0;
+      }
+    }
+
+    @media (min-width: 900px) {
+      body {
+        padding: 1.25rem;
+      }
+
+      .sheet {
+        max-width: 48rem;
+        padding: 2.25rem 2.5rem;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+        padding: 0;
+        font-size: 11pt;
+      }
+
+      .sheet {
+        margin: 0;
+        box-shadow: none;
+        max-width: none;
+        width: auto;
+        padding: 0;
+        border-radius: 0;
+      }
+
+      .two-col {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .page-break {
+        break-before: page;
+        page-break-before: always;
+        border-top: none;
+        margin-top: 0;
+        padding-top: 0;
+      }
+
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <article class="sheet">
+    <header class="brand-bar">
+      <span class="dot" aria-hidden="true"></span>
+      <div>
+        <h1>Buddy</h1>
+        <p class="tagline">
+          I built Buddy as a small helper that stays on my screen for notes,
+          reminders, and meetings. In meetings it can also tell who is speaking.
+          Everything stays on my own computer.
+        </p>
+      </div>
+    </header>
+
+    <h2>What Buddy is</h2>
+    <p>
+      Buddy is a small square that sits on top of whatever else I am doing.
+      When I click it, I get a place to write something down, save a task, or
+      turn a meeting into notes I can actually use later. During a meeting it
+      can recognize people by their voice and show who is talking in real time.
+    </p>
+    <p>
+      I did not want another website login or a paid plan. There is no signup
+      and no subscription. What I write and record stays on my PC.
+    </p>
+
+    <h2>Who I made it for</h2>
+    <ul>
+      <li>Anyone who keeps forgetting small todos in the middle of a busy day</li>
+      <li>Anyone who ends a call and cannot remember what was decided or who said it</li>
+      <li>Anyone who wants meeting notes with real names, not just a wall of text</li>
+      <li>Anyone who wants their notes and meetings to stay private on their machine</li>
+    </ul>
+
+    <h2>What it can do</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>Voice identification in meetings</h3>
+        <p>
+          This is one of the most important parts for me. I enroll a name once
+          by speaking into the mic. In a live meeting Buddy can show who is
+          speaking, and later the transcript can carry those names too. It
+          matches the sound of the voice, not the exact words someone reads.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Meeting notes</h3>
+        <p>
+          I can record a meeting with my mic and the sound from my computer.
+          Buddy then gives me a transcript, a short summary, and action items.
+          With voices enrolled, those notes make more sense because I can see
+          who said what.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Notes and checklists</h3>
+        <p>
+          I can create a note, put tasks under it, and break a big task into
+          smaller ones. I use this for checkpoint lists and daily follow ups.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Reminders</h3>
+        <p>
+          I can set a reminder on a task for later today, tomorrow, or another
+          day. Buddy can also nudge me in the morning about what is still open.
+        </p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Simply put:</strong> Buddy helps me catch thoughts, not lose tasks,
+      and leave meetings knowing who said what, not just what was said. All of
+      that stays on my own machine.
+    </div>
+
+    <div class="footer">
+      <span>Buddy overview</span>
+      <span>Page 1 of 2</span>
+    </div>
+
+    <section class="page-break">
+      <h2>How I use it in a normal day</h2>
+      <ol class="steps">
+        <li>
+          <strong>I start my computer.</strong> Buddy can open on its own, so
+          the square is already waiting on my screen.
+        </li>
+        <li>
+          <strong>I click the square.</strong> A small window opens with my
+          notes and meeting tools.
+        </li>
+        <li>
+          <strong>I jot a note or task</strong> when something comes to mind.
+          I do not need to open a big app or a browser tab for that.
+        </li>
+        <li>
+          <strong>Before meetings that matter,</strong> I enroll voices once.
+          Each person speaks for a short time under their name. After that Buddy
+          knows how they sound.
+        </li>
+        <li>
+          <strong>In a meeting,</strong> I press Record. Buddy listens to me
+          and to the call audio from my computer. While people talk, it can
+          show who is speaking right now.
+        </li>
+        <li>
+          <strong>When I stop,</strong> Buddy prepares a transcript with speaker
+          names where it can, plus a summary and next steps I can turn into tasks.
+        </li>
+      </ol>
+
+      <h2>What Buddy is not</h2>
+      <ul>
+        <li>It is not a social network or chat app</li>
+        <li>It does not upload my meetings to some company website by default</li>
+        <li>I do not need a pile of tech terms just to use notes and reminders</li>
+      </ul>
+
+      <h2>About privacy</h2>
+      <p>
+        My notes, tasks, and meeting recordings live on my PC. If I set up the
+        optional speech and summary tools, those also run on my machine. The
+        whole point for me is simple: my work stays with me.
+      </p>
+
+      <h2>Getting started</h2>
+      <ol class="steps">
+        <li>Install Buddy on a Windows computer using the start instructions in the project.</li>
+        <li>Find the light brown square on the screen and click it once.</li>
+        <li>Try <strong>New note</strong>, add a task, and set a reminder.</li>
+        <li>On the Meet tab, enroll your voice, then use Test voice to check it.</li>
+        <li>When you feel ready, try a short meeting recording and watch who is speaking.</li>
+      </ol>
+
+      <div class="callout">
+        <strong>If I had to say it in one line:</strong> Buddy is like a sticky
+        note that can also take meeting minutes and tell who is talking. It stays
+        private, stays on top, and fits a real workday.
+      </div>
+
+      <div class="footer">
+        <span>Buddy overview</span>
+        <span>Page 2 of 2</span>
+      </div>
+    </section>
+  </article>
+</body>
+</html>
