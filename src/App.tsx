@@ -7,7 +7,7 @@ import {
 import NotesView from "./NotesView";
 import MeetView from "./MeetView";
 import MangaBubble from "./MangaBubble";
-import { useMeetingRecorder } from "./useMeetingRecorder";
+import { useMeetingRecorder, nowSpeakingLabel } from "./useMeetingRecorder";
 import {
   materializeReminder,
   reminderFromTask,
@@ -29,6 +29,18 @@ function formatElapsed(seconds: number) {
   return `${m}:${s}`;
 }
 
+const SPEAKER_COLORS = ["#6e9bb8", "#8fad8a", "#d08a6a", "#d08a98", "#8a919c"];
+
+function speakerColor(name: string) {
+  const text = String(name || "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % SPEAKER_COLORS.length;
+  return SPEAKER_COLORS[idx];
+}
+
 function resolveReminder(pending: PendingReminderRef): ReminderDef | null {
   if (pending.kind === "task" && pending.taskId) {
     return reminderFromTask(pending.taskId, pending.title || "this task");
@@ -39,6 +51,7 @@ function resolveReminder(pending: PendingReminderRef): ReminderDef | null {
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("icon");
+  const [iconColor, setIconColor] = useState("sand");
   const [tab, setTab] = useState<Tab>("notes");
   const [activeReminder, setActiveReminder] = useState<ReminderDef | null>(
     null
@@ -56,11 +69,42 @@ export default function App() {
     if (!window.buddy) return;
     void window.buddy.getState().then((s) => {
       setMode(s.mode === "panel" ? "panel" : "icon");
+      if (s.iconColor) setIconColor(s.iconColor);
     });
-    return window.buddy.onModeChange((value) => {
+    const offMode = window.buddy.onModeChange((value) => {
       setMode(value === "panel" ? "panel" : "icon");
     });
+    const offColor = window.buddy.onIconColor((color) => {
+      setIconColor(color);
+    });
+    return () => {
+      offMode();
+      offColor();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!window.buddy) return;
+    return window.buddy.onIconMenuAction((action) => {
+      if (action === "record") {
+        void recorder.startRecording();
+        return;
+      }
+      if (action === "stop") {
+        void recorder.stopRecording().then((noteId) => {
+          if (noteId) void openPanel("meet");
+        });
+        return;
+      }
+      if (action === "cancel") {
+        recorder.cancelRecording();
+        return;
+      }
+      if (action === "open") {
+        void openPanel(recording ? "meet" : undefined);
+      }
+    });
+  }, [recorder, recording]);
 
   useEffect(() => {
     if (!window.buddy || recording) return;
@@ -211,7 +255,7 @@ export default function App() {
   if (mode !== "panel") {
     return (
       <div
-        className={`collapsed-root ${recording ? "recording" : ""} ${
+        className={`collapsed-root color-${iconColor} ${recording ? "recording" : ""} ${
           activeReminder ? "with-bubble" : ""
         }`}
       >
@@ -223,7 +267,7 @@ export default function App() {
           />
         ) : null}
         <button
-          className={`icon-orb ${recording ? "recording" : ""}`}
+          className={`icon-orb color-${iconColor} ${recording ? "recording" : ""}`}
           aria-label={
             recorder.phase === "recording"
               ? `Recording ${formatElapsed(recorder.elapsed)} — click to open`
@@ -231,14 +275,42 @@ export default function App() {
           }
           title={
             recorder.phase === "recording"
-              ? `Recording ${formatElapsed(recorder.elapsed)}`
+              ? `Recording ${formatElapsed(recorder.elapsed)} — ${nowSpeakingLabel(
+                  recorder.liveSpeakerState,
+                  recorder.liveSpeaker
+                )}`
               : recorder.phase === "processing"
                 ? "Processing meeting…"
                 : "Open Buddy"
           }
           onPointerDown={onIconPointerDown}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            window.buddy.showIconMenu({
+              phase: recorder.phase,
+              x: Math.round(e.clientX),
+              y: Math.round(e.clientY),
+            });
+          }}
         >
           <BuddyMark className="icon-mark" />
+          {recorder.phase === "recording" && recorder.liveSpeakerTrail.length > 0 ? (
+            <span className="icon-speaker-strip" aria-hidden>
+              {recorder.liveSpeakerTrail.map((name) => (
+                <span
+                  key={name}
+                  className={`icon-speaker-box ${
+                    recorder.liveSpeakerState === "name" &&
+                    recorder.liveSpeaker === name
+                      ? "active"
+                      : ""
+                  }`}
+                  style={{ background: speakerColor(name) }}
+                />
+              ))}
+            </span>
+          ) : null}
           {recorder.phase === "recording" ? (
             <span className="icon-rec-time">{formatElapsed(recorder.elapsed)}</span>
           ) : null}
@@ -248,16 +320,25 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell theme-${iconColor}`}>
       <div className="panel">
         <div className="titlebar" onPointerDown={onPanelDragDown}>
           <div className="titlebar-brand">
             <div className={`brand-dot ${recording ? "recording" : ""}`}>
               <BuddyMark />
             </div>
+            <span className="brand-name">Buddy</span>
             {recorder.phase === "recording" ? (
               <span className="title-rec">
                 REC {formatElapsed(recorder.elapsed)}
+                {` · ${
+                  recorder.liveSpeakerState === "name" && recorder.liveSpeaker
+                    ? `Now: ${recorder.liveSpeaker}`
+                    : nowSpeakingLabel(
+                        recorder.liveSpeakerState,
+                        recorder.liveSpeaker
+                      )
+                }`}
               </span>
             ) : null}
           </div>

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Transcribe an audio file with faster-whisper. Prints transcript to stdout."""
+"""Transcribe an audio file with faster-whisper. Prints JSON to stdout."""
 
 import argparse
+import json
 import sys
 
 
@@ -45,8 +46,22 @@ def main() -> int:
     try:
         model = WhisperModel(args.model, device="cpu", compute_type="int8")
         segments, _info = model.transcribe(args.audio, beam_size=5)
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        _write_utf8(text)
+        parts = []
+        timed = []
+        for seg in segments:
+            text = (seg.text or "").strip()
+            if not text:
+                continue
+            parts.append(text)
+            timed.append(
+                {
+                    "start": float(seg.start or 0),
+                    "end": float(seg.end or 0),
+                    "text": text,
+                }
+            )
+        payload = {"text": " ".join(parts).strip(), "segments": timed}
+        _write_utf8(json.dumps(payload, ensure_ascii=False))
         return 0
     except Exception as exc:  # noqa: BLE001
         _write_utf8(str(exc), error=True)

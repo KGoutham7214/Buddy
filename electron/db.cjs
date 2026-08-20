@@ -10,6 +10,7 @@ function createDb(userDataPath) {
   const defaultData = () => ({
     notes: [],
     tasks: [],
+    voices: [],
   });
 
   function readJson(filePath, fallback) {
@@ -27,7 +28,19 @@ function createDb(userDataPath) {
   }
 
   function load() {
-    return readJson(dbPath, defaultData);
+    const data = readJson(dbPath, defaultData);
+    if (!Array.isArray(data.voices)) data.voices = [];
+    return data;
+  }
+
+  function publicVoice(voice) {
+    return {
+      id: voice.id,
+      name: voice.name,
+      backend: voice.backend || "",
+      createdAt: voice.createdAt,
+      updatedAt: voice.updatedAt,
+    };
   }
 
   function save(data) {
@@ -46,6 +59,7 @@ function createDb(userDataPath) {
       kind: note.kind === "meeting" ? "meeting" : "note",
       transcript: note.transcript || "",
       summary: note.summary || "",
+      summaryError: note.summaryError || "",
       audioPath: note.audioPath || null,
       keyPoints: Array.isArray(note.keyPoints) ? note.keyPoints : [],
       decisions: Array.isArray(note.decisions) ? note.decisions : [],
@@ -85,6 +99,7 @@ function createDb(userDataPath) {
       kind = "note",
       transcript = "",
       summary = "",
+      summaryError = "",
       audioPath = null,
       keyPoints = [],
       decisions = [],
@@ -97,6 +112,7 @@ function createDb(userDataPath) {
         kind: kind === "meeting" ? "meeting" : "note",
         transcript: transcript || "",
         summary: summary || "",
+        summaryError: summaryError || "",
         audioPath: audioPath || null,
         keyPoints: Array.isArray(keyPoints) ? keyPoints : [],
         decisions: Array.isArray(decisions) ? decisions : [],
@@ -116,6 +132,7 @@ function createDb(userDataPath) {
       if (typeof patch.body === "string") note.body = patch.body;
       if (typeof patch.transcript === "string") note.transcript = patch.transcript;
       if (typeof patch.summary === "string") note.summary = patch.summary;
+      if (typeof patch.summaryError === "string") note.summaryError = patch.summaryError;
       if ("audioPath" in patch) note.audioPath = patch.audioPath;
       if (Array.isArray(patch.keyPoints)) note.keyPoints = patch.keyPoints;
       if (Array.isArray(patch.decisions)) note.decisions = patch.decisions;
@@ -229,6 +246,61 @@ function createDb(userDataPath) {
     ensureRecordingsDir() {
       fs.mkdirSync(recordingsDir, { recursive: true });
       return recordingsDir;
+    },
+
+    listVoices() {
+      return load()
+        .voices.map(publicVoice)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    listVoiceEmbeddings() {
+      return load().voices.filter(
+        (v) => Array.isArray(v.embedding) && v.embedding.length > 0
+      );
+    },
+
+    createVoice({ name, embedding, backend } = {}) {
+      const data = load();
+      const trimmed = String(name || "").trim() || "Voice";
+      const existing = data.voices.find(
+        (v) => String(v.name).toLowerCase() === trimmed.toLowerCase()
+      );
+      if (existing) {
+        existing.embedding = Array.isArray(embedding) ? embedding : [];
+        existing.backend = backend || "";
+        existing.updatedAt = now();
+        save(data);
+        return publicVoice(existing);
+      }
+      const voice = {
+        id: randomUUID(),
+        name: trimmed,
+        embedding: Array.isArray(embedding) ? embedding : [],
+        backend: backend || "",
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      data.voices.push(voice);
+      save(data);
+      return publicVoice(voice);
+    },
+
+    deleteVoice(id) {
+      const data = load();
+      const before = data.voices.length;
+      data.voices = data.voices.filter((v) => v.id !== id);
+      if (data.voices.length === before) return false;
+      save(data);
+      return true;
+    },
+
+    clearVoices() {
+      const data = load();
+      const had = Array.isArray(data.voices) ? data.voices.length : 0;
+      data.voices = [];
+      save(data);
+      return had;
     },
   };
 }

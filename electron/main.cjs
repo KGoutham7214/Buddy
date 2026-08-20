@@ -4,24 +4,38 @@ const {
   ipcMain,
   screen,
   desktopCapturer,
+  Menu,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const { randomUUID } = require("crypto");
 const { createDb } = require("./db.cjs");
-const { checkWhisper, transcribeAudio } = require("./transcribe.cjs");
-const { checkOllama, summarizeMeeting } = require("./ollama.cjs");
+const { checkWhisper } = require("./transcribe.cjs");
+const { checkOllama } = require("./ollama.cjs");
 const reminders = require("./reminders.cjs");
+const speakers = require("./speakers.cjs");
+const qdrant = require("./qdrant.cjs");
+const voiceService = require("./voiceService.cjs");
+const meetingPipeline = require("./meetingPipeline.cjs");
 
 const ICON_SIZE = 52;
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 580;
-const PANEL_MIN_W = 320;
-const PANEL_MIN_H = 420;
+const PANEL_MIN_W = 300;
+const PANEL_MIN_H = 380;
 /** Icon + manga speech bubble chrome */
 const BUBBLE_WIDTH = 320;
 const BUBBLE_HEIGHT = 200;
+const COLOR_SWATCH = 20;
+const COLOR_GAP = 5;
+const COLOR_PAD = 8;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
+const RECORDING_BG = "#c45c5c";
+const ICON_THEMES = [
+  { id: "sand", label: "Sand", idle: "#c4a574" },
+  { id: "ocean", label: "Ocean", idle: "#5d8aa8" },
+  { id: "sage", label: "Sage", idle: "#7d9b78" },
+  { id: "rose", label: "Rose", idle: "#c47a8a" },
+];
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -48,8 +62,41 @@ let suppressPersist = false;
 let isRecording = false;
 /** Manga reminder bubble attached to the floating icon */
 let bubbleActive = false;
+/** Horizontal color swatches next to the floating icon */
+let colorPickerActive = false;
 /** In-flight icon↔panel morph */
 let modeAnimTimer = null;
+
+function iconThemeId() {
+  const id = db?.getConfig()?.iconColor;
+  return ICON_THEMES.some((theme) => theme.id === id) ? id : "sand";
+}
+
+function iconIdleBg() {
+  return (
+    ICON_THEMES.find((theme) => theme.id === iconThemeId())?.idle || "#c4a574"
+  );
+}
+
+function iconWindowBg() {
+  if (bubbleActive) return "#f4efe6";
+  if (colorPickerActive) return "#1a1c20";
+  if (isRecording) return RECORDING_BG;
+  return iconIdleBg();
+}
+
+function applyIconWindowBg() {
+  if (!win || win.isDestroyed() || mode !== "icon") return;
+  win.setBackgroundColor(iconWindowBg());
+}
+
+function setIconColor(id) {
+  const theme = ICON_THEMES.find((item) => item.id === id) || ICON_THEMES[0];
+  db?.setConfig({ iconColor: theme.id });
+  applyIconWindowBg();
+  win?.webContents.send("icon:color", theme.id);
+  return theme.id;
+}
 
 function clampBounds(width, height, x, y) {
   const display = screen.getDisplayNearestPoint({ x, y });
@@ -146,28 +193,72 @@ function animateBounds(from, to, durationMs, onDone) {
   modeAnimTimer = setInterval(tick, 16);
 }
 
+function iconChrome() {
+  if (bubbleActive) return { width: BUBBLE_WIDTH, height: BUBBLE_HEIGHT };
+  if (colorPickerActive) {
+    const tray =
+      COLOR_PAD * 2 +
+      ICON_THEMES.length * COLOR_SWATCH +
+      (ICON_THEMES.length - 1) * COLOR_GAP +
+      6 +
+      ICON_SIZE;
+    return { width: tray, height: ICON_SIZE };
+  }
+  return { width: ICON_SIZE, height: ICON_SIZE };
+}
+
+function iconPosFromWindow(x, y) {
+  const chrome = iconChrome();
+  return {
+    x: x + (chrome.width - ICON_SIZE),
+    y: y + (chrome.height - ICON_SIZE),
+  };
+}
+
 function applyIconChrome() {
   if (!win) return;
-  // Unlock first so shrinking min/max never hits min>max
   win.setResizable(true);
   win.setMaximumSize(10000, 10000);
-  const w = bubbleActive ? BUBBLE_WIDTH : ICON_SIZE;
-  const h = bubbleActive ? BUBBLE_HEIGHT : ICON_SIZE;
-  win.setMinimumSize(w, h);
-  win.setMaximumSize(w, h);
+  const { width, height } = iconChrome();
+  win.setMinimumSize(width, height);
+  win.setMaximumSize(width, height);
   win.setResizable(false);
 }
 
 function iconLayoutBounds() {
-  const w = bubbleActive ? BUBBLE_WIDTH : ICON_SIZE;
-  const h = bubbleActive ? BUBBLE_HEIGHT : ICON_SIZE;
+  const { width, height } = iconChrome();
   const fallback = defaultIconPos();
   const ix = typeof iconPos.x === "number" ? iconPos.x : fallback.x;
   const iy = typeof iconPos.y === "number" ? iconPos.y : fallback.y;
-  // Keep the icon square anchored at iconPos (bubble grows left/up)
-  const x = bubbleActive ? ix - (BUBBLE_WIDTH - ICON_SIZE) : ix;
-  const y = bubbleActive ? iy - (BUBBLE_HEIGHT - ICON_SIZE) : iy;
-  return ensureOnScreen(w, h, x, y);
+  const x = ix - (width - ICON_SIZE);
+  const y = iy - (height - ICON_SIZE);
+  return ensureOnScreen(width, height, x, y);
+}
+
+function layoutIconWindow() {
+  if (!win || win.isDestroyed() || mode !== "icon") return;
+  applyIconChrome();
+  win.setBackgroundColor(iconWindowBg());
+  win.setBounds(iconLayoutBounds(), false);
+}
+
+function setColorPickerActive(active) {
+  if (!win || mode !== "icon") {
+    colorPickerActive = false;
+    return false;
+  }
+  if (active && bubbleActive) return false;
+  colorPickerActive = Boolean(active);
+  suppressPersist = true;
+  try {
+    layoutIconWindow();
+    win.webContents.send("icon:color-picker", colorPickerActive);
+  } finally {
+    setTimeout(() => {
+      suppressPersist = false;
+    }, 200);
+  }
+  return colorPickerActive;
 }
 
 function setBubbleActive(active) {
@@ -176,14 +267,13 @@ function setBubbleActive(active) {
     return false;
   }
   bubbleActive = Boolean(active);
+  if (bubbleActive) colorPickerActive = false;
   suppressPersist = true;
   try {
-    applyIconChrome();
-    win.setBackgroundColor(
-      bubbleActive ? "#f4efe6" : isRecording ? "#c45c5c" : "#c4a574"
-    );
-    const next = iconLayoutBounds();
-    win.setBounds(next, false);
+    layoutIconWindow();
+    if (bubbleActive) {
+      win.webContents.send("icon:color-picker", false);
+    }
   } finally {
     setTimeout(() => {
       suppressPersist = false;
@@ -274,18 +364,13 @@ function applyWindowMode(nextMode) {
 
   if (mode === "panel") {
     if (prev === "icon") {
-      if (bubbleActive) {
-        iconPos = {
-          x: bounds.x + (BUBBLE_WIDTH - ICON_SIZE),
-          y: bounds.y + (BUBBLE_HEIGHT - ICON_SIZE),
-        };
-      } else {
-        iconPos = { x: bounds.x, y: bounds.y };
-      }
+      iconPos = iconPosFromWindow(bounds.x, bounds.y);
       bubbleActive = false;
+      colorPickerActive = false;
       panelSize = panelSizeFromConfig();
     } else {
       bubbleActive = false;
+      colorPickerActive = false;
     }
     const size = normalizePanelSize(panelSize.width, panelSize.height);
     panelSize = size;
@@ -317,10 +402,11 @@ function applyWindowMode(nextMode) {
     rememberPanelSize(bounds.width, bounds.height);
   }
   bubbleActive = false;
+  colorPickerActive = false;
   const onScreen = iconLayoutBounds();
   iconPos = { x: onScreen.x, y: onScreen.y };
   unlockForMorph();
-  win.setBackgroundColor(isRecording ? "#c45c5c" : "#c4a574");
+  win.setBackgroundColor(iconWindowBg());
   if (prev === "panel") {
     animateBounds(bounds, onScreen, 200, () => {
       applyIconChrome();
@@ -354,8 +440,19 @@ function persistBounds() {
   }
 }
 
+async function migrateVoicesToQdrant() {
+  if (!db) return;
+  const legacy = db.listVoiceEmbeddings();
+  if (!legacy.length) return;
+  const reachable = await qdrant.check();
+  if (!reachable.ok) return;
+  const moved = await qdrant.migrateVoices(legacy);
+  if (moved.ok) db.clearVoices();
+}
+
 function createWindow() {
   db = createDb(app.getPath("userData"));
+  voiceService.init(db);
   const config = db.getConfig();
   mode = config.mode === "panel" ? "panel" : "icon";
   loadPositionsFromConfig();
@@ -400,7 +497,7 @@ function createWindow() {
     hasShadow: false,
     roundedCorners: true,
     show: false,
-    backgroundColor: mode === "panel" ? "#141414" : "#c4a574",
+    backgroundColor: mode === "panel" ? "#141414" : iconIdleBg(),
     paintWhenInitiallyHidden: true,
     minWidth: mode === "panel" ? PANEL_MIN_W : ICON_SIZE,
     minHeight: mode === "panel" ? PANEL_MIN_H : ICON_SIZE,
@@ -429,6 +526,10 @@ function createWindow() {
       callback(false);
     }
   );
+
+  win.webContents.on("context-menu", (event) => {
+    event.preventDefault();
+  });
 
   win.webContents.on("did-fail-load", (_e, code, desc, url) => {
     console.error("Failed to load", url, code, desc);
@@ -562,11 +663,17 @@ function registerIpc() {
   ipcMain.handle("app:getState", () => ({
     mode,
     userDataPath: app.getPath("userData"),
+    iconColor: iconThemeId(),
   }));
+  ipcMain.handle("app:setIconColor", (_e, id) => setIconColor(id));
+  ipcMain.handle("app:setColorPicker", (_e, active) =>
+    setColorPickerActive(Boolean(active))
+  );
 
   ipcMain.handle("app:setMode", (_event, nextMode) => {
     if (nextMode === "panel") {
       bubbleActive = false;
+      colorPickerActive = false;
     }
     applyWindowMode(nextMode === "panel" ? "panel" : "icon");
     // Persist after mode switch settles (iconX kept when opening panel)
@@ -608,10 +715,75 @@ function registerIpc() {
   ipcMain.handle("app:setRecording", (_event, active) => {
     isRecording = Boolean(active);
     if (!win) return false;
-    if (mode === "icon") {
-      win.setBackgroundColor(isRecording ? "#c45c5c" : "#c4a574");
-    }
+    if (mode === "icon") applyIconWindowBg();
     return true;
+  });
+
+  ipcMain.on("icon:context-menu", (_event, payload) => {
+    if (!win || win.isDestroyed()) return;
+    const phase = payload?.phase || "idle";
+    const template = [];
+
+    if (phase === "idle") {
+      template.push({
+        label: "Record meeting",
+        click: () => win?.webContents.send("icon:menu-action", "record"),
+      });
+    }
+    if (phase === "recording") {
+      template.push(
+        {
+          label: "Stop & process",
+          click: () => win?.webContents.send("icon:menu-action", "stop"),
+        },
+        {
+          label: "Cancel recording",
+          click: () => win?.webContents.send("icon:menu-action", "cancel"),
+        }
+      );
+    }
+    if (phase === "processing") {
+      template.push({
+        label: "Processing…",
+        enabled: false,
+      });
+    }
+
+    template.push(
+      { type: "separator" },
+      {
+        label: "Theme",
+        submenu: ICON_THEMES.map((theme) => ({
+          label: theme.label,
+          type: "radio",
+          checked: theme.id === iconThemeId(),
+          click: () => setIconColor(theme.id),
+        })),
+      },
+      {
+        label: "Open Buddy",
+        click: () => win?.webContents.send("icon:menu-action", "open"),
+      }
+    );
+
+    const menu = Menu.buildFromTemplate(template);
+    const x = Number.isFinite(payload?.x) ? Math.round(payload.x) : undefined;
+    const y = Number.isFinite(payload?.y) ? Math.round(payload.y) : undefined;
+
+    // Native menus sit below "screen-saver" always-on-top on Windows.
+    win.focus();
+    win.setAlwaysOnTop(true, "floating");
+    const restoreZ = () => {
+      if (win && !win.isDestroyed()) win.setAlwaysOnTop(true, "screen-saver");
+    };
+    setImmediate(() => {
+      if (!win || win.isDestroyed()) return;
+      menu.popup({
+        window: win,
+        ...(x != null && y != null ? { x, y } : {}),
+        callback: restoreZ,
+      });
+    });
   });
 
   ipcMain.on("window:drag-start", (_event, { screenX, screenY }) => {
@@ -684,13 +856,8 @@ function registerIpc() {
       if (mode === "panel") {
         panelPos = { x, y };
         rememberPanelSize(dragSize.width, dragSize.height);
-      } else if (bubbleActive) {
-        iconPos = {
-          x: x + (BUBBLE_WIDTH - ICON_SIZE),
-          y: y + (BUBBLE_HEIGHT - ICON_SIZE),
-        };
       } else {
-        iconPos = { x, y };
+        iconPos = iconPosFromWindow(x, y);
       }
     }
     dragMovePending = null;
@@ -699,7 +866,7 @@ function registerIpc() {
     // Restore resize only for the panel
     if (win) win.setResizable(mode === "panel");
     // Bubble layout keeps a fixed outer size
-    if (mode === "icon" && bubbleActive) {
+    if (mode === "icon" && (bubbleActive || colorPickerActive)) {
       applyIconChrome();
     }
     persistBounds();
@@ -741,89 +908,36 @@ function registerIpc() {
   });
 
   ipcMain.handle("meeting:checkDeps", async () => {
-    const [whisper, ollama] = await Promise.all([
+    const [whisper, ollama, speaker, qdrantStatus] = await Promise.all([
       checkWhisper(),
       checkOllama(),
+      speakers.check(),
+      qdrant.check(),
     ]);
-    return { whisper, ollama };
+    return { whisper, ollama, speakers: speaker, qdrant: qdrantStatus };
   });
 
   ipcMain.handle("meeting:process", async (_e, payload) => {
-    const { buffer, mimeType } = payload || {};
-    if (!buffer) {
-      return { ok: false, error: "No audio received" };
-    }
-
-    const dir = db.ensureRecordingsDir();
-    const id = randomUUID();
-    const ext = String(mimeType || "").includes("webm") ? "webm" : "wav";
-    const fileName = `${id}.${ext}`;
-    const fullPath = path.join(dir, fileName);
-    const relativePath = path.join("recordings", fileName);
-
-    try {
-      fs.writeFileSync(fullPath, Buffer.from(buffer));
-    } catch (err) {
-      return { ok: false, error: err.message || "Failed to save audio" };
-    }
-
-    win?.webContents.send("meeting:progress", "Transcribing with Whisper…");
-    const stt = await transcribeAudio(fullPath, { model: "base" });
-    if (!stt.ok) {
-      return {
-        ok: false,
-        error: stt.error,
-        audioPath: relativePath,
-      };
-    }
-
-    const transcript = String(stt.text || "").trim();
-
-    win?.webContents.send("meeting:progress", "Summarizing with Ollama…");
-    const ai = await summarizeMeeting(transcript);
-
-    // Empty / junk / model-marked irrelevant: do not invent a meeting note.
-    if (!ai.ok && ai.irrelevant) {
-      return {
-        ok: false,
-        error:
-          ai.error ||
-          `transcript is not relevant and can not be processed : ${
-            transcript || "(empty)"
-          }`,
-        audioPath: relativePath,
-        irrelevant: true,
-      };
-    }
-
-    const note = db.createNote({
-      title:
-        (ai.ok && ai.title) ||
-        `Meeting — ${new Date().toLocaleString()}`,
-      body: transcript,
-      kind: "meeting",
-      transcript,
-      summary: (ai.ok && ai.summary) || "",
-      keyPoints: (ai.ok && ai.keyPoints) || [],
-      decisions: (ai.ok && ai.decisions) || [],
-      audioPath: relativePath,
+    return meetingPipeline.processMeeting(payload, {
+      db,
+      onProgress: (message) => win?.webContents.send("meeting:progress", message),
     });
-
-    if (ai.ok && (ai.tasks || []).length > 0) {
-      db.createTasksFromPlan({
-        noteId: note.id,
-        title: "Action items",
-        subtasks: ai.tasks,
-      });
-    }
-
-    return {
-      ok: true,
-      noteId: note.id,
-      note,
-      aiError: ai.ok ? null : ai.error || null,
-    };
   });
+
+  ipcMain.handle("meeting:summarize", async (_e, noteId) => {
+    return meetingPipeline.summarizeNote(noteId, {
+      db,
+      onProgress: (message) => win?.webContents.send("meeting:progress", message),
+    });
+  });
+
+  ipcMain.handle("voices:list", () => voiceService.listVoices());
+  ipcMain.handle("voices:delete", (_e, id) => voiceService.deleteVoice(id));
+  ipcMain.handle("voices:resetSession", () => voiceService.resetSession());
+  ipcMain.handle("voices:enroll", (_e, payload) => voiceService.enrollVoice(payload));
+  ipcMain.handle("voices:identify", (_e, payload) =>
+    voiceService.identifySpeaker(payload)
+  );
 }
 
 app.isQuitting = false;
@@ -848,9 +962,10 @@ if (!gotSingleInstanceLock) {
       return;
     }
     if (mode === "icon") {
+      const chrome = iconChrome();
       const onScreen = ensureOnScreen(
-        bubbleActive ? BUBBLE_WIDTH : ICON_SIZE,
-        bubbleActive ? BUBBLE_HEIGHT : ICON_SIZE,
+        chrome.width,
+        chrome.height,
         iconPos.x ?? win.getBounds().x,
         iconPos.y ?? win.getBounds().y
       );
@@ -878,8 +993,10 @@ app.whenReady().then(() => {
     // ignore
   }
 
+  speakers.init(path.join(app.getPath("userData"), "speaker-models"));
   registerIpc();
   createWindow();
+  void migrateVoicesToQdrant();
   setInterval(() => {
     if (!db || !win) return;
     const due = reminders.listPending(db).filter((r) => r.kind === "task");
@@ -907,6 +1024,7 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   app.isQuitting = true;
   persistBounds();
+  speakers.stop();
   try {
     const pidPath = path.join(app.getPath("userData"), "buddy.pid");
     if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);

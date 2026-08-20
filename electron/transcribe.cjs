@@ -66,12 +66,27 @@ function transcribeAudio(audioPath, { model = "base" } = {}) {
         });
         return;
       }
-      const text = stdout.trim();
+      const raw = stdout.trim();
+      if (!raw) {
+        resolve({ ok: false, error: "Empty transcript" });
+        return;
+      }
+      let text = raw;
+      let segments = [];
+      if (raw.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(raw);
+          text = String(parsed.text || "").trim();
+          segments = Array.isArray(parsed.segments) ? parsed.segments : [];
+        } catch {
+          text = raw;
+        }
+      }
       if (!text) {
         resolve({ ok: false, error: "Empty transcript" });
         return;
       }
-      resolve({ ok: true, text });
+      resolve({ ok: true, text, segments });
     });
   });
 }

@@ -78,7 +78,9 @@ $started = $null
 for ($attempt = 1; $attempt -le 3; $attempt++) {
   Write-Log "launching attempt $attempt"
   try {
-    $started = Start-Process -FilePath $Electron -ArgumentList @($Root) -WorkingDirectory $Root -PassThru
+    # Quote the project path so spaces (e.g. OneDrive folder names) stay one argument.
+    $quotedRoot = '"' + $Root + '"'
+    $started = Start-Process -FilePath $Electron -ArgumentList $quotedRoot -WorkingDirectory $Root -PassThru
     Write-Log ("started process id " + $started.Id)
   } catch {
     Write-Log ("Start-Process FAILED: " + $_.Exception.Message)

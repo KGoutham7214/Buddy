@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("buddy", {
   dragStart: (payload) => ipcRenderer.send("window:drag-start", payload),
   dragMove: (payload) => ipcRenderer.send("window:drag-move", payload),
   dragEnd: () => ipcRenderer.send("window:drag-end"),
+  showIconMenu: (payload) => ipcRenderer.send("icon:context-menu", payload),
 
   listNotes: () => ipcRenderer.invoke("notes:list"),
   createNote: (payload) => ipcRenderer.invoke("notes:create", payload),
@@ -21,7 +22,14 @@ contextBridge.exposeInMainWorld("buddy", {
   getDesktopSource: () => ipcRenderer.invoke("meeting:desktopSource"),
   checkMeetingDeps: () => ipcRenderer.invoke("meeting:checkDeps"),
   processMeeting: (payload) => ipcRenderer.invoke("meeting:process", payload),
+  summarizeMeeting: (noteId) => ipcRenderer.invoke("meeting:summarize", noteId),
   setRecording: (active) => ipcRenderer.invoke("app:setRecording", active),
+
+  listVoices: () => ipcRenderer.invoke("voices:list"),
+  enrollVoice: (payload) => ipcRenderer.invoke("voices:enroll", payload),
+  deleteVoice: (id) => ipcRenderer.invoke("voices:delete", id),
+  resetSpeakerSession: () => ipcRenderer.invoke("voices:resetSession"),
+  identifySpeaker: (payload) => ipcRenderer.invoke("voices:identify", payload),
 
   listPendingReminders: () => ipcRenderer.invoke("reminders:pending"),
   markReminderShown: (id) => ipcRenderer.invoke("reminders:markShown", id),
@@ -47,5 +55,17 @@ contextBridge.exposeInMainWorld("buddy", {
     const handler = () => callback();
     ipcRenderer.on("reminders:due", handler);
     return () => ipcRenderer.removeListener("reminders:due", handler);
+  },
+
+  onIconMenuAction: (callback) => {
+    const handler = (_event, action) => callback(action);
+    ipcRenderer.on("icon:menu-action", handler);
+    return () => ipcRenderer.removeListener("icon:menu-action", handler);
+  },
+
+  onIconColor: (callback) => {
+    const handler = (_event, color) => callback(color);
+    ipcRenderer.on("icon:color", handler);
+    return () => ipcRenderer.removeListener("icon:color", handler);
   },
 });

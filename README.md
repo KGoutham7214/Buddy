@@ -79,7 +79,7 @@ cd buddy
 
 Replace `<your-username>` with the GitHub account that owns the repo.
 
-**Tip:** If the folder lives inside OneDrive and things act strangely, copy it to a short path like `C:\buddy`.
+**Tip:** Keep the project off OneDrive if you can. A short path like `C:\dev\buddy` avoids login/start problems with spaces in folder names.
 
 ---
 
@@ -248,11 +248,11 @@ Start the Ollama app, then run `ollama pull llama3.2`.
 **Meet: no system audio**  
 Allow screen/audio capture when Windows asks. If it still fails, only your microphone is recorded.
 
-**Meet: “transcript is not relevant”**  
-The recording was empty or not a real conversation. Buddy will not invent notes.
+**Meet: clip not saved**  
+Buddy only skips a note when the recording is silence or junk. Short standups still save; the AI summary may be empty.
 
-**Folder is on OneDrive and installs break**  
-Copy the project to `C:\buddy` and run it from there.
+**Folder is on OneDrive and installs or autostart break**  
+Copy the project to `C:\dev\buddy` and run it from there.
 
 ---
 
