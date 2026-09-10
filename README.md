@@ -79,7 +79,7 @@ cd buddy
 
 Replace `<your-username>` with the GitHub account that owns the repo.
 
-**Tip:** If the folder lives inside OneDrive and things act strangely, copy it to a short path like `C:\buddy`.
+**Tip:** Keep the project off OneDrive if you can. A short path like `C:\dev\buddy` avoids login/start problems with spaces in folder names.
 
 ---
 
@@ -123,7 +123,161 @@ A brown icon should appear. Click it to open Buddy.
 
 There is no Quit button on purpose. Buddy is meant to stay nearby. To hide it, click **−**.
 
-After the first successful launch, Buddy registers itself to **open when you sign in to Windows** (about 1–2 minutes after login).
+After the first successful launch, Buddy can register itself to **open when you sign in to Windows**. See [Start Buddy automatically at login](#start-buddy-automatically-at-login) for setup, checks, and how to turn it off.
+
+---
+
+## Start Buddy automatically at login
+
+Use this if you cloned the repo and want the brown icon waiting for you after you sign in, without opening a terminal each day.
+
+### Windows (automatic)
+
+Buddy registers login startup **about 1–2 minutes after the first successful launch**. You do not need to edit the registry yourself.
+
+What it sets up:
+
+| What | Purpose |
+|------|---------|
+| **Registry Run entry** (`Buddy`) | Starts Buddy shortly after sign-in |
+| **Scheduled Task** (`BuddyAutostart`) | Backup start ~75 seconds after logon (helps when OneDrive or network drives delay files) |
+| **`%APPDATA%\buddy\start-buddy.ps1`** | Wrapper that points at your project folder and Electron |
+| **`%APPDATA%\buddy\autostart.log`** | Log file if login start fails |
+
+**Check that it worked**
+
+1. Fully quit Buddy (Task Manager → **Electron** → End task).
+2. Sign out and sign back in, or restart Windows.
+3. Wait up to **2 minutes** (the task is delayed on purpose).
+4. Look for the light-brown square on your desktop.
+
+If nothing appears, open the log:
+
+```powershell
+notepad $env:APPDATA\buddy\autostart.log
+```
+
+Common log messages:
+
+| Log line | Meaning |
+|----------|---------|
+| `already running electron pid …` | Buddy is already open (normal if you started it twice) |
+| `verified electron pid …` | Login start succeeded |
+| `WARNING: Buddy did not stay running` | Launch failed; try manual start below |
+| `gave up waiting for Buddy files` | Project path or `dist\index.html` was missing at boot |
+
+**Tips for reliable Windows autostart**
+
+- Keep the repo at a **fixed path**, for example `C:\dev\buddy`.
+- Avoid OneDrive-synced folders if login start is flaky.
+- Run **`npm install`** and start Buddy once from that folder before relying on autostart.
+- After moving the project, launch Buddy once manually so it rewrites the autostart scripts with the new path.
+
+**Turn off Windows autostart**
+
+- **Settings** → **Apps** → **Startup** → turn off **Buddy**
+- **Task Scheduler** → delete or disable **BuddyAutostart**
+- Optional: remove the `Buddy` value under  
+  `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`
+
+**Manual Windows fallback**
+
+If automatic registration fails, you can still start Buddy at login:
+
+1. Press `Win + R`, type `shell:startup`, press Enter.
+2. Create a shortcut to **`Start Buddy.bat`** in your project folder.
+3. Or pin your own shortcut that runs `npm run preview` from the `buddy` folder.
+
+---
+
+### MacBook (manual setup)
+
+Buddy is built and tested on **Windows**. On a Mac you can still clone and run it from source, but **login startup is not registered automatically** yet. Set it up once as follows.
+
+**1. One-time project setup**
+
+```bash
+git clone https://github.com/<your-username>/buddy.git
+cd buddy
+npm install
+npm run build
+```
+
+Replace `<your-username>` with the GitHub account that owns the repo.
+
+**2. Create a start script**
+
+Save this as `start-buddy.sh` inside the project folder (adjust the path):
+
+```bash
+#!/bin/bash
+cd "/Users/you/dev/buddy"
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+npm start
+```
+
+Make it executable:
+
+```bash
+chmod +x start-buddy.sh
+```
+
+Use `npm start` (Electron only) after `npm run build`. It is faster at login than `npm run preview`, which rebuilds every time.
+
+**3. Add it to Login Items (easiest)**
+
+1. Open **System Settings** → **General** → **Login Items**
+2. Under **Open at Login**, click **+**
+3. Select **`start-buddy.sh`** (or create a small Automator app that runs the script)
+4. Turn the entry **on**
+
+On older macOS versions: **System Settings** → **Users & Groups** → your user → **Login Items**.
+
+**4. Optional: LaunchAgent (more control)**
+
+Create `~/Library/LaunchAgents/com.buddy.dev.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.buddy.dev</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /Users/you/dev/buddy &amp;&amp; npm start</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/buddy-autostart.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/buddy-autostart.err</string>
+</dict>
+</plist>
+```
+
+Load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.buddy.dev.plist
+```
+
+To remove later:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.buddy.dev.plist
+rm ~/Library/LaunchAgents/com.buddy.dev.plist
+```
+
+**Mac notes**
+
+- Install **Node.js LTS** from [nodejs.org](https://nodejs.org) first.
+- Some **Meet** features (Whisper, voice ID, system audio capture) may be limited or need extra setup on macOS.
+- If the icon does not appear, run `./start-buddy.sh` in Terminal and read the error, or check `/tmp/buddy-autostart.err`.
 
 ---
 
@@ -133,7 +287,7 @@ Any of these work:
 
 - Double-click **`Start Buddy.bat`**
 - Or in the `buddy` folder run `npm run preview`
-- Or wait for it after you sign in to Windows
+- Or wait for it after you sign in to Windows (see [Start Buddy automatically at login](#start-buddy-automatically-at-login))
 
 You can make a Desktop shortcut: right-click `Start Buddy.bat` → **Send to** → **Desktop (create shortcut)**.
 
@@ -227,11 +381,10 @@ Make sure you are inside the folder that contains `package.json`. You need inter
 - Run `npm run preview` again from the project folder  
 
 **Buddy did not start after reboot**  
-Wait about two minutes (it waits for OneDrive/files). Then open `%APPDATA%\buddy\autostart.log`. You can always start it with `Start Buddy.bat`.
+See [Start Buddy automatically at login](#start-buddy-automatically-at-login). Wait about two minutes, then open `%APPDATA%\buddy\autostart.log`. You can always start it with `Start Buddy.bat`.
 
 **Turn off start-at-login**  
-Windows Settings → **Apps** → **Startup** → turn off **Buddy**.  
-You can also delete the `Buddy` entry under Task Scheduler (`BuddyAutostart`).
+See **Turn off Windows autostart** under [Start Buddy automatically at login](#start-buddy-automatically-at-login).
 
 **Fully quit Buddy**  
 Task Manager (`Ctrl + Shift + Esc`) → **Electron** or **Buddy** → **End task**.
@@ -248,11 +401,11 @@ Start the Ollama app, then run `ollama pull llama3.2`.
 **Meet: no system audio**  
 Allow screen/audio capture when Windows asks. If it still fails, only your microphone is recorded.
 
-**Meet: “transcript is not relevant”**  
-The recording was empty or not a real conversation. Buddy will not invent notes.
+**Meet: clip not saved**  
+Buddy only skips a note when the recording is silence or junk. Short standups still save; the AI summary may be empty.
 
-**Folder is on OneDrive and installs break**  
-Copy the project to `C:\buddy` and run it from there.
+**Folder is on OneDrive and installs or autostart break**  
+Copy the project to `C:\dev\buddy` and run it from there.
 
 ---
 

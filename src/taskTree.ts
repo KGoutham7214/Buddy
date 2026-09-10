@@ -1,4 +1,4 @@
-import type { Task } from "./vite-env";
+import type { Task } from "./domain/types";
 
 export type TaskNode = {
   task: Task;

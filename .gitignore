@@ -39,3 +39,10 @@ Desktop.ini
 tmp/
 temp/
 *.local
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Large speaker models (downloaded at runtime into userData)
+*.onnx

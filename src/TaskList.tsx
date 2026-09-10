@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Task } from "./vite-env";
+import type { Task } from "./domain/types";
 import { buildTaskTree, type TaskNode } from "./taskTree";
 import { IconClock, IconPlus, IconTrash } from "./icons";
 

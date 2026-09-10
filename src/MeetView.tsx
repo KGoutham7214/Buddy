@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Note, Task } from "./vite-env";
-import type { MeetingRecorder } from "./useMeetingRecorder";
+import type { Note, Task } from "./domain/types";
+import { buddy } from "./api/buddyClient";
+import { nowSpeakingLabel, type MeetingRecorder } from "./useMeetingRecorder";
 import TaskList from "./TaskList";
 import { IconTrash } from "./icons";
+import { useConfirm } from "./ConfirmDialog";
 
 type Deps = {
   whisper: { ok: boolean; error?: string };
   ollama: { ok: boolean; error?: string; models?: string[] };
+  speakers?: { ok: boolean; error?: string; backend?: string };
+  qdrant?: { ok: boolean; error?: string };
 };
 
 function formatDate(iso: string) {
@@ -41,6 +45,8 @@ export default function MeetView({ recorder }: Props) {
     status,
     error,
     captureInfo,
+    liveSpeaker,
+    liveSpeakerState,
     startRecording,
     stopRecording,
     cancelRecording,
@@ -51,6 +57,8 @@ export default function MeetView({ recorder }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deps, setDeps] = useState<Deps | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   const selected = useMemo(
     () => meetings.find((n) => n.id === selectedId) || null,
@@ -63,11 +71,11 @@ export default function MeetView({ recorder }: Props) {
   }, [tasks, selectedId]);
 
   async function refresh(preferId?: string | null) {
-    const list = (await window.buddy.listNotes()).filter(
+    const list = (await buddy.listNotes()).filter(
       (n) => n.kind === "meeting"
     );
     setMeetings(list);
-    setTasks(await window.buddy.listTasks());
+    setTasks(await buddy.listTasks());
     setSelectedId((current) => {
       if (preferId && list.some((n) => n.id === preferId)) return preferId;
       if (current && list.some((n) => n.id === current)) return current;
@@ -77,7 +85,7 @@ export default function MeetView({ recorder }: Props) {
 
   useEffect(() => {
     void refresh();
-    void window.buddy.checkMeetingDeps().then(setDeps);
+    void buddy.checkMeetingDeps().then(setDeps);
   }, []);
 
   useEffect(() => {
@@ -89,43 +97,67 @@ export default function MeetView({ recorder }: Props) {
     if (noteId) await refresh(noteId);
   }
 
+  async function generateSummary() {
+    if (!selected || summarizing) return;
+    setSummarizing(true);
+    try {
+      await buddy.summarizeMeeting(selected.id);
+      await refresh(selected.id);
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
   async function removeMeeting() {
     if (!selected) return;
-    await window.buddy.deleteNote(selected.id);
+    const label = selected.title?.trim() || "this meeting";
+    const ok = await confirm({
+      title: "Delete meeting?",
+      message: `“${label}” and its action items will be removed. This cannot be undone.`,
+    });
+    if (!ok) return;
+    await buddy.deleteNote(selected.id);
     await refresh(null);
   }
 
   async function addSubtask(parentId: string) {
     if (!selected) return;
-    await window.buddy.createTask({
+    await buddy.createTask({
       title: "New subtask",
       parentId,
       noteId: selected.id,
     });
-    setTasks(await window.buddy.listTasks());
+    setTasks(await buddy.listTasks());
   }
 
   async function toggleTask(task: Task) {
-    await window.buddy.updateTask(task.id, { done: !task.done });
-    setTasks(await window.buddy.listTasks());
+    await buddy.updateTask(task.id, { done: !task.done });
+    setTasks(await buddy.listTasks());
   }
 
   async function renameTask(task: Task, title: string) {
     if (title.trim() === task.title) return;
-    await window.buddy.updateTask(task.id, {
+    await buddy.updateTask(task.id, {
       title: title.trim() || task.title,
     });
-    setTasks(await window.buddy.listTasks());
+    setTasks(await buddy.listTasks());
   }
 
   async function removeTask(id: string) {
-    await window.buddy.deleteTask(id);
-    setTasks(await window.buddy.listTasks());
+    const task = tasks.find((t) => t.id === id);
+    const label = task?.title?.trim() || "this task";
+    const ok = await confirm({
+      title: "Delete task?",
+      message: `“${label}” and any nested subtasks will be removed.`,
+    });
+    if (!ok) return;
+    await buddy.deleteTask(id);
+    setTasks(await buddy.listTasks());
   }
 
   async function scheduleTask(task: Task, remindAt: string | null) {
-    await window.buddy.updateTask(task.id, { remindAt });
-    setTasks(await window.buddy.listTasks());
+    await buddy.updateTask(task.id, { remindAt });
+    setTasks(await buddy.listTasks());
   }
 
   const transcript = selected?.transcript || selected?.body || "";
@@ -138,6 +170,7 @@ export default function MeetView({ recorder }: Props) {
 
   return (
     <div className="content">
+      {dialog}
       <div className="meet-toolbar">
         {phase === "idle" ? (
           <button
@@ -150,7 +183,19 @@ export default function MeetView({ recorder }: Props) {
         ) : null}
         {phase === "recording" ? (
           <>
-            <span className="rec-dot" aria-hidden />
+            <div
+              className={`now-speaking-bar ${
+                liveSpeakerState === "name" ? "known" : liveSpeakerState
+              }`}
+            >
+              <span className="rec-dot" aria-hidden />
+              <div className="now-speaking-copy">
+                <span className="now-speaking-kicker">Now speaking</span>
+                <span className="now-speaking-name">
+                  {nowSpeakingLabel(liveSpeakerState, liveSpeaker)}
+                </span>
+              </div>
+            </div>
             <span className="rec-timer">{formatElapsed(elapsed)}</span>
             <span className="capture-info">{captureInfo}</span>
             <button className="btn btn-danger" onClick={() => void handleStop()}>
@@ -174,6 +219,13 @@ export default function MeetView({ recorder }: Props) {
           <span className={deps.ollama.ok ? "dep ok" : "dep bad"}>
             Ollama {deps.ollama.ok ? "ready" : "missing"}
           </span>
+          <span className={deps.speakers?.ok ? "dep ok" : "dep bad"}>
+            Voice ID {deps.speakers?.ok ? "ready" : "missing"}
+          </span>
+          <span className={deps.qdrant?.ok ? "dep ok" : "dep bad"}>
+            Qdrant {deps.qdrant?.ok ? "ready" : "missing"}
+          </span>
+          <span className="deps-hint">Models &amp; voices in Settings</span>
         </div>
       ) : null}
 
@@ -228,9 +280,24 @@ export default function MeetView({ recorder }: Props) {
                   <div className="meet-card muted">
                     <div className="meet-section-label">Summary</div>
                     <p className="meet-summary">
-                      No AI summary yet. Ensure Ollama is running with a model
-                      pulled (`ollama pull llama3.2`), then record again.
+                      {summarizing
+                        ? "Writing summary with Ollama…"
+                        : selected.summaryError ||
+                          (deps?.ollama && !deps.ollama.ok
+                            ? deps.ollama.error ||
+                              "Start Ollama and pull a model, then generate a summary."
+                            : "No AI summary yet. Ollama is ready — generate one from this transcript.")}
                     </p>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => void generateSummary()}
+                      disabled={
+                        summarizing ||
+                        Boolean(deps && deps.ollama && !deps.ollama.ok)
+                      }
+                    >
+                      {summarizing ? "Generating…" : "Generate summary"}
+                    </button>
                   </div>
                 )}
 

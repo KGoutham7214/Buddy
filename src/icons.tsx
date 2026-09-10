@@ -30,6 +30,33 @@ export function IconMinus() {
   );
 }
 
+export function IconSettings() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M6.55 1.85h2.9l.35 1.45c.4.15.77.37 1.1.64l1.48-.5.95 1.65-1.13 1.05c.05.23.08.47.08.71s-.03.48-.08.71l1.13 1.05-.95 1.65-1.48-.5c-.33.27-.7.49-1.1.64l-.35 1.45h-2.9l-.35-1.45a4.1 4.1 0 0 1-1.1-.64l-1.48.5-.95-1.65 1.13-1.05A3.7 3.7 0 0 1 3.4 8c0-.24.03-.48.08-.71L2.35 6.24l.95-1.65 1.48.5c.33-.27.7-.49 1.1-.64l.35-1.45Z"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="1.85" stroke="currentColor" strokeWidth="1.25" />
+    </svg>
+  );
+}
+
+export function IconClose() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M4 4l8 8M12 4l-8 8"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function IconClock() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none">

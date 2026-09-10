@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { Note, Task } from "./vite-env";
+import type { Note, Task } from "./domain/types";
+import { buddy } from "./api/buddyClient";
 import TaskList from "./TaskList";
 import { IconPlus, IconTrash } from "./icons";
+import { useConfirm } from "./ConfirmDialog";
 
 function formatDate(iso: string) {
   try {
@@ -21,6 +23,7 @@ export default function NotesView() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [taskDraft, setTaskDraft] = useState("");
+  const { confirm, dialog } = useConfirm();
 
   const selected = useMemo(
     () => notes.find((n) => n.id === selectedId) || null,
@@ -33,7 +36,7 @@ export default function NotesView() {
   }, [tasks, selectedId]);
 
   async function refreshNotes(preferId?: string | null) {
-    const list = (await window.buddy.listNotes()).filter(
+    const list = (await buddy.listNotes()).filter(
       (n) => n.kind !== "meeting"
     );
     setNotes(list);
@@ -45,7 +48,7 @@ export default function NotesView() {
   }
 
   async function refreshTasks() {
-    setTasks(await window.buddy.listTasks());
+    setTasks(await buddy.listTasks());
   }
 
   useEffect(() => {
@@ -54,13 +57,13 @@ export default function NotesView() {
   }, []);
 
   async function createNote() {
-    const note = await window.buddy.createNote({ title: "Untitled", body: "" });
+    const note = await buddy.createNote({ title: "Untitled", body: "" });
     await refreshNotes(note.id);
   }
 
   async function saveTitle(title: string) {
     if (!selected) return;
-    const updated = await window.buddy.updateNote(selected.id, { title });
+    const updated = await buddy.updateNote(selected.id, { title });
     if (updated) {
       setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
     }
@@ -68,7 +71,7 @@ export default function NotesView() {
 
   async function saveBody(body: string) {
     if (!selected) return;
-    const updated = await window.buddy.updateNote(selected.id, { body });
+    const updated = await buddy.updateNote(selected.id, { body });
     if (updated) {
       setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
     }
@@ -76,7 +79,13 @@ export default function NotesView() {
 
   async function removeNote() {
     if (!selected) return;
-    await window.buddy.deleteNote(selected.id);
+    const label = selected.title?.trim() || "this note";
+    const ok = await confirm({
+      title: "Delete note?",
+      message: `“${label}” and its tasks will be removed. This cannot be undone.`,
+    });
+    if (!ok) return;
+    await buddy.deleteNote(selected.id);
     setTaskDraft("");
     await refreshNotes(null);
     await refreshTasks();
@@ -87,7 +96,7 @@ export default function NotesView() {
     if (!selected) return;
     const title = taskDraft.trim();
     if (!title) return;
-    await window.buddy.createTask({
+    await buddy.createTask({
       title,
       noteId: selected.id,
       parentId: null,
@@ -98,7 +107,7 @@ export default function NotesView() {
 
   async function addSubtask(parentId: string) {
     if (!selected) return;
-    await window.buddy.createTask({
+    await buddy.createTask({
       title: "New subtask",
       parentId,
       noteId: selected.id,
@@ -107,30 +116,38 @@ export default function NotesView() {
   }
 
   async function toggleTask(task: Task) {
-    await window.buddy.updateTask(task.id, { done: !task.done });
+    await buddy.updateTask(task.id, { done: !task.done });
     await refreshTasks();
   }
 
   async function renameTask(task: Task, title: string) {
     if (title.trim() === task.title) return;
-    await window.buddy.updateTask(task.id, {
+    await buddy.updateTask(task.id, {
       title: title.trim() || task.title,
     });
     await refreshTasks();
   }
 
   async function removeTask(id: string) {
-    await window.buddy.deleteTask(id);
+    const task = tasks.find((t) => t.id === id);
+    const label = task?.title?.trim() || "this task";
+    const ok = await confirm({
+      title: "Delete task?",
+      message: `“${label}” and any nested subtasks will be removed.`,
+    });
+    if (!ok) return;
+    await buddy.deleteTask(id);
     await refreshTasks();
   }
 
   async function scheduleTask(task: Task, remindAt: string | null) {
-    await window.buddy.updateTask(task.id, { remindAt });
+    await buddy.updateTask(task.id, { remindAt });
     await refreshTasks();
   }
 
   return (
     <div className="content">
+      {dialog}
       <div className="toolbar">
         <button className="btn btn-primary" onClick={() => void createNote()}>
           <IconPlus /> New note
