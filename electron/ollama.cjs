@@ -19,8 +19,9 @@ async function checkOllama() {
   }
 }
 
-function pickModel(models) {
+function pickModel(models, preferredName = "") {
   const preferred = [
+    preferredName,
     "llama3.2",
     "llama3.2:latest",
     "llama3.1",
@@ -29,10 +30,10 @@ function pickModel(models) {
     "mistral",
     "phi3",
     "qwen2.5",
-  ];
+  ].filter(Boolean);
   for (const name of preferred) {
     const hit = models.find(
-      (m) => m === name || m.startsWith(`${name.split(":")[0]}:`)
+      (m) => m === name || m.startsWith(`${String(name).split(":")[0]}:`)
     );
     if (hit) return hit;
   }
@@ -141,19 +142,31 @@ function filterActionItems(items) {
 function looksInvented(summary, transcript) {
   const s = cleanText(summary).toLowerCase();
   if (!s) return true;
-  const invented =
-    /\b(the team|this meeting|participants|discussed the|agenda|project status|quarterly|stakeholders)\b/i;
   const t = cleanText(transcript).toLowerCase();
-  if (invented.test(s) && t.length < 120) return true;
-  return false;
+  // Only flag when the summary is long relative to a tiny transcript and
+  // uses stock corporate filler that never appears in the source.
+  if (t.length >= 160) return false;
+  const invented =
+    /\b(quarterly|stakeholders|roadmap alignment|synerg(?:y|ies)|circle back)\b/i;
+  return invented.test(s) && !invented.test(t);
 }
 
-function clipTranscript(text, max = 8000) {
+function chunkTranscript(text, chunkSize = 5500, overlap = 400) {
   const t = String(text || "").trim();
-  if (t.length <= max) return t;
-  const head = Math.floor(max * 0.55);
-  const tail = max - head - 5;
-  return `${t.slice(0, head)}\n…\n${t.slice(-tail)}`;
+  if (t.length <= chunkSize) return [t];
+  const chunks = [];
+  let start = 0;
+  while (start < t.length) {
+    let end = Math.min(t.length, start + chunkSize);
+    if (end < t.length) {
+      const breakAt = t.lastIndexOf("\n", end);
+      if (breakAt > start + chunkSize * 0.5) end = breakAt;
+    }
+    chunks.push(t.slice(start, end).trim());
+    if (end >= t.length) break;
+    start = Math.max(0, end - overlap);
+  }
+  return chunks.filter(Boolean);
 }
 
 function parseJsonObject(text) {
@@ -213,7 +226,7 @@ async function ollamaGenerate(model, prompt, { formatJson, timeoutMs }) {
       options: {
         temperature: 0.1,
         top_p: 0.9,
-        num_predict: 700,
+        num_predict: 1200,
         num_ctx: 8192,
       },
     };
@@ -265,7 +278,8 @@ Return ONLY valid JSON (no markdown):
 
 Rules:
 - NEVER invent facts, people, projects, or action items not clearly in the transcript
-- Use speaker labels when attributing decisions and tasks. Do not invent other people.
+- When speaker labels like [Name] exist, attribute decisions, key points, and tasks to those speakers
+- If a fact is unclear, omit it or write "not stated" — do not guess
 - Do not set relevant to false just because the talk is informal, short, incomplete, or hard to hear
 - decisions/keyPoints/tasks must be empty arrays when nothing real exists
 - no markdown fences, no commentary outside JSON
@@ -277,13 +291,101 @@ ${transcript}`;
 function simplePrompt(transcript) {
   return `Summarize this conversation. Return ONLY JSON:
 {"title":"max 8 words","summary":"2-5 sentences of what people said","decisions":[],"keyPoints":[],"tasks":[]}
-Use only facts from the transcript. Use empty arrays when nothing is clear. Do not invent people or projects.
+Use only facts from the transcript. Use speaker labels when present. Use empty arrays when nothing is clear. Do not invent people or projects.
 
 Transcript:
 ${transcript}`;
 }
 
-async function summarizeMeeting(transcript) {
+function chunkPrompt(transcript, index, total) {
+  return `This is part ${index + 1} of ${total} of a longer meeting transcript.
+Extract only facts from this part. Return ONLY JSON:
+{"summary":"2-4 sentences from this part","decisions":[],"keyPoints":[],"tasks":[]}
+Do not invent people or projects. Use speaker labels when present. Empty arrays when nothing is clear.
+
+Transcript part:
+${transcript}`;
+}
+
+function mergePrompt(partials) {
+  return `Merge these partial meeting notes into one final JSON object.
+Keep only facts supported by the partials. Prefer speaker-attributed wording when present.
+Return ONLY JSON:
+{"relevant": true, "title": "max 8 words", "summary": "3-6 sentences", "decisions": [], "keyPoints": [], "tasks": []}
+
+Partials:
+${partials}`;
+}
+
+async function generateNotes(model, prompt, transcript, { formatJson = true, timeoutMs = 150000 } = {}) {
+  const generated = await ollamaGenerate(model, prompt, { formatJson, timeoutMs });
+  if (!generated.ok) return { ok: false, error: generated.error };
+  const parsed = parseJsonObject(generated.text);
+  const notes = notesFromParsed(parsed, transcript);
+  if (notes && notes.skipped) {
+    return {
+      ok: false,
+      skipped: true,
+      error: "Ollama skipped this clip. Click Generate summary to try again.",
+    };
+  }
+  if (!notes) {
+    return { ok: false, error: "Could not parse model response as JSON" };
+  }
+  return { ok: true, notes };
+}
+
+async function summarizeLongMeeting(model, transcript) {
+  const chunks = chunkTranscript(transcript);
+  const partials = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const result = await generateNotes(
+      model,
+      chunkPrompt(chunks[i], i, chunks.length),
+      chunks[i],
+      { formatJson: true, timeoutMs: 150000 }
+    );
+    if (result.ok) {
+      partials.push(
+        JSON.stringify({
+          summary: result.notes.summary,
+          decisions: result.notes.decisions,
+          keyPoints: result.notes.keyPoints,
+          tasks: result.notes.tasks,
+        })
+      );
+    }
+  }
+  if (partials.length === 0) {
+    return { ok: false, error: "Could not summarize long transcript chunks" };
+  }
+  const merged = await generateNotes(
+    model,
+    mergePrompt(partials.join("\n")),
+    transcript,
+    { formatJson: true, timeoutMs: 180000 }
+  );
+  if (merged.ok) return { ok: true, notes: merged.notes };
+  // Fallback: stitch summaries if merge JSON fails
+  return {
+    ok: true,
+    notes: {
+      title: "Meeting notes",
+      summary: polishSummary(partials.map((p) => {
+        try {
+          return JSON.parse(p).summary;
+        } catch {
+          return "";
+        }
+      }).filter(Boolean).join(" ")),
+      decisions: [],
+      keyPoints: [],
+      tasks: [],
+    },
+  };
+}
+
+async function summarizeMeeting(transcript, { model: preferredModel = null } = {}) {
   if (!isUsableTranscript(transcript)) {
     return { ok: false, irrelevant: true, error: irrelevantError() };
   }
@@ -291,7 +393,7 @@ async function summarizeMeeting(transcript) {
   const status = await checkOllama();
   if (!status.ok) return { ok: false, error: status.error };
 
-  const model = pickModel(status.models);
+  const model = pickModel(status.models, preferredModel || "");
   if (!model) {
     return {
       ok: false,
@@ -299,30 +401,23 @@ async function summarizeMeeting(transcript) {
     };
   }
 
-  const clipped = clipTranscript(transcript, 8000);
+  const text = String(transcript || "").trim();
+  if (text.length > 6000) {
+    const long = await summarizeLongMeeting(model, text);
+    if (long.ok) return { ok: true, model, ...long.notes };
+    return { ok: false, skipSummary: true, error: long.error };
+  }
+
   const attempts = [
-    { prompt: fullPrompt(clipped), formatJson: true, timeoutMs: 150000 },
-    { prompt: simplePrompt(clipped), formatJson: false, timeoutMs: 150000 },
+    { prompt: fullPrompt(text), formatJson: true, timeoutMs: 150000 },
+    { prompt: simplePrompt(text), formatJson: false, timeoutMs: 150000 },
   ];
 
   let lastError = "Could not parse model response as JSON";
   for (const attempt of attempts) {
-    const generated = await ollamaGenerate(model, attempt.prompt, attempt);
-    if (!generated.ok) {
-      lastError = generated.error;
-      continue;
-    }
-    const parsed = parseJsonObject(generated.text);
-    const notes = notesFromParsed(parsed, clipped);
-    if (notes && notes.skipped) {
-      lastError = "Ollama skipped this clip. Click Generate summary to try again.";
-      continue;
-    }
-    if (!notes) {
-      lastError = "Could not parse model response as JSON";
-      continue;
-    }
-    return { ok: true, model, ...notes };
+    const result = await generateNotes(model, attempt.prompt, text, attempt);
+    if (result.ok) return { ok: true, model, ...result.notes };
+    lastError = result.error || lastError;
   }
 
   return {
@@ -332,4 +427,9 @@ async function summarizeMeeting(transcript) {
   };
 }
 
-module.exports = { checkOllama, summarizeMeeting, isUsableTranscript };
+module.exports = {
+  checkOllama,
+  summarizeMeeting,
+  isUsableTranscript,
+  pickModel,
+};

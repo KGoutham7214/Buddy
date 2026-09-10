@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("buddy", {
   getState: () => ipcRenderer.invoke("app:getState"),
   setMode: (mode) => ipcRenderer.invoke("app:setMode", mode),
+  setIconColor: (id) => ipcRenderer.invoke("app:setIconColor", id),
+  setUserName: (value) => ipcRenderer.invoke("app:setUserName", value),
 
   dragStart: (payload) => ipcRenderer.send("window:drag-start", payload),
   dragMove: (payload) => ipcRenderer.send("window:drag-move", payload),
@@ -21,6 +23,8 @@ contextBridge.exposeInMainWorld("buddy", {
 
   getDesktopSource: () => ipcRenderer.invoke("meeting:desktopSource"),
   checkMeetingDeps: () => ipcRenderer.invoke("meeting:checkDeps"),
+  getMeetSettings: () => ipcRenderer.invoke("meeting:getSettings"),
+  setMeetSettings: (payload) => ipcRenderer.invoke("meeting:setSettings", payload),
   processMeeting: (payload) => ipcRenderer.invoke("meeting:process", payload),
   summarizeMeeting: (noteId) => ipcRenderer.invoke("meeting:summarize", noteId),
   setRecording: (active) => ipcRenderer.invoke("app:setRecording", active),

@@ -98,6 +98,23 @@ function setIconColor(id) {
   return theme.id;
 }
 
+function normalizeUserName(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
+}
+
+function currentUserName() {
+  return normalizeUserName(db?.getConfig()?.userName || "");
+}
+
+function setUserName(value) {
+  const userName = normalizeUserName(value);
+  db?.setConfig({ userName });
+  return userName;
+}
+
 function clampBounds(width, height, x, y) {
   const display = screen.getDisplayNearestPoint({ x, y });
   const work = display.workArea;
@@ -664,8 +681,15 @@ function registerIpc() {
     mode,
     userDataPath: app.getPath("userData"),
     iconColor: iconThemeId(),
+    userName: currentUserName(),
+    capabilities: {
+      meet: true,
+      voiceId: true,
+      floatingShell: true,
+    },
   }));
   ipcMain.handle("app:setIconColor", (_e, id) => setIconColor(id));
+  ipcMain.handle("app:setUserName", (_e, value) => setUserName(value));
   ipcMain.handle("app:setColorPicker", (_e, active) =>
     setColorPickerActive(Boolean(active))
   );
@@ -916,6 +940,11 @@ function registerIpc() {
     ]);
     return { whisper, ollama, speakers: speaker, qdrant: qdrantStatus };
   });
+
+  ipcMain.handle("meeting:getSettings", () => meetingPipeline.getMeetSettings(db));
+  ipcMain.handle("meeting:setSettings", (_e, partial) =>
+    meetingPipeline.setMeetSettings(db, partial || {})
+  );
 
   ipcMain.handle("meeting:process", async (_e, payload) => {
     return meetingPipeline.processMeeting(payload, {

@@ -1,8 +1,9 @@
 const MIC_CONSTRAINTS_BASE: MediaTrackConstraints = {
   // Speaker ID needs the raw mic. Headset AEC often zeros or warps speech.
+  // Keep AGC on so quiet headsets still clear the speech gate.
   echoCancellation: false,
   noiseSuppression: false,
-  autoGainControl: false,
+  autoGainControl: true,
 };
 
 type MicPick = {

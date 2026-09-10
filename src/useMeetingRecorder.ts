@@ -8,6 +8,7 @@ import {
 } from "./pcm";
 import { openPreferredMicStream } from "./audioInput";
 import { attachVoiceTap, type VoiceTap } from "./voiceTap";
+import { buddy, hasBuddyApi } from "./api/buddyClient";
 
 export type RecordPhase = "idle" | "recording" | "processing";
 export type LiveSpeakerState = "listening" | "name" | "unknown";
@@ -28,7 +29,7 @@ export type MeetingRecorder = {
   clearError: () => void;
 };
 
-const WINDOW_SECONDS = 2.5;
+const WINDOW_SECONDS = 2.0;
 const HOLD_MS = 1200;
 const SWITCH_MARGIN = 0.05;
 const MAX_IDENTIFY_QUEUE = 4;
@@ -53,6 +54,7 @@ type PcmSample = {
   pcm: Uint8Array;
   rms: number;
   voiced: boolean;
+  channel: "mic" | "system";
 };
 
 export function nowSpeakingLabel(
@@ -88,7 +90,8 @@ export function useMeetingRecorder(): MeetingRecorder {
   }>({ recorder: null, streams: [], context: null, chunks: [] });
 
   useEffect(() => {
-    return window.buddy?.onMeetingProgress((message) => setStatus(message));
+    if (!hasBuddyApi()) return;
+    return buddy.onMeetingProgress((message) => setStatus(message));
   }, []);
 
   useEffect(() => {
@@ -98,8 +101,9 @@ export function useMeetingRecorder(): MeetingRecorder {
   }, [phase]);
 
   useEffect(() => {
+    if (!hasBuddyApi()) return;
     const active = phase === "recording" || phase === "processing";
-    void window.buddy?.setRecording?.(active);
+    void buddy.setRecording(active);
   }, [phase]);
 
   function resetLiveSpeaker() {
@@ -128,7 +132,7 @@ export function useMeetingRecorder(): MeetingRecorder {
 
   async function getSystemAudioStream(): Promise<MediaStream | null> {
     try {
-      const sourceId = await window.buddy.getDesktopSource();
+      const sourceId = await buddy.getDesktopSource();
       if (!sourceId) return null;
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -165,7 +169,10 @@ export function useMeetingRecorder(): MeetingRecorder {
     mic: MediaStream,
     system: MediaStream | null
   ) {
-    const hold = { label: "", score: 0, at: 0 };
+    const hold = {
+      mic: { label: "", score: 0, at: 0 },
+      system: { label: "", score: 0, at: 0 },
+    };
     const windowSamples = Math.floor(context.sampleRate * WINDOW_SECONDS);
 
     function recordTurn(result: IdentifyResult) {
@@ -183,19 +190,45 @@ export function useMeetingRecorder(): MeetingRecorder {
       });
     }
 
-    function applyResult(result: IdentifyResult | null, heardSpeech: boolean) {
+    function publishUi(
+      channel: "mic" | "system",
+      state: LiveSpeakerState,
+      label: string
+    ) {
+      // Prefer mic identity for the floating label; system fills when mic is quiet.
+      if (channel === "system" && hold.mic.label && Date.now() - hold.mic.at < HOLD_MS) {
+        return;
+      }
+      setLiveSpeaker(label);
+      setLiveSpeakerState(state);
+      if (label) {
+        setLiveSpeakerTrail((prev) => {
+          const next = prev.filter((name) => name !== label);
+          next.push(label);
+          return next.slice(-4);
+        });
+      }
+    }
+
+    function applyResult(
+      result: IdentifyResult | null,
+      heardSpeech: boolean,
+      channel: "mic" | "system"
+    ) {
       const now = Date.now();
+      const slot = hold[channel];
       const silent =
         !heardSpeech ||
         !result ||
         result.speech === false ||
         result.kind === "silence";
       if (silent) {
-        if (!hold.label || now - hold.at > HOLD_MS) {
-          hold.label = "";
-          hold.score = 0;
-          setLiveSpeaker("");
-          setLiveSpeakerState("listening");
+        if (!slot.label || now - slot.at > HOLD_MS) {
+          slot.label = "";
+          slot.score = 0;
+          if (channel === "mic" || !hold.mic.label) {
+            publishUi(channel, "listening", "");
+          }
         }
         return;
       }
@@ -203,33 +236,30 @@ export function useMeetingRecorder(): MeetingRecorder {
         const label = result.label;
         const score = result.confidence ?? 0;
         const switchOk =
-          !hold.label ||
-          hold.label === label ||
-          score - hold.score >= SWITCH_MARGIN;
+          !slot.label ||
+          slot.label === label ||
+          score - slot.score >= SWITCH_MARGIN;
         if (switchOk) {
-          hold.label = label;
-          hold.score = score;
-          hold.at = now;
-          setLiveSpeaker(label);
-          setLiveSpeakerState("name");
+          slot.label = label;
+          slot.score = score;
+          slot.at = now;
+          publishUi(channel, "name", label);
           recordTurn(result);
-          setLiveSpeakerTrail((prev) => {
-            const next = prev.filter((name) => name !== label);
-            next.push(label);
-            return next.slice(-4);
-          });
         } else {
-          hold.at = now;
+          slot.at = now;
         }
         return;
       }
-      if (!hold.label || now - hold.at > HOLD_MS) {
-        hold.label = "";
-        hold.score = 0;
-        hold.at = now;
-        setLiveSpeaker("");
-        setLiveSpeakerState("unknown");
-        if (result.ok && result.label) recordTurn(result);
+      if (!slot.label || now - slot.at > HOLD_MS) {
+        slot.label = "";
+        slot.score = 0;
+        slot.at = now;
+        if (result.ok && result.label) {
+          recordTurn(result);
+          publishUi(channel, "unknown", result.label);
+        } else if (channel === "mic" || !hold.mic.label) {
+          publishUi(channel, "unknown", "");
+        }
       }
     }
 
@@ -241,16 +271,16 @@ export function useMeetingRecorder(): MeetingRecorder {
           const sample = identifyQueue.current.shift();
           if (!sample) break;
           if (!sample.voiced) {
-            applyResult(null, false);
+            applyResult(null, false, sample.channel);
             continue;
           }
-          if (!window.buddy?.identifySpeaker) continue;
-          const result = await window.buddy.identifySpeaker({
+          if (!hasBuddyApi()) continue;
+          const result = await buddy.identifySpeaker({
             pcm: sample.pcm,
             sampleRate: 16000,
           });
           if (result.ok && result.kind === "enrolled" && result.label) {
-            applyResult(result, true);
+            applyResult(result, true, sample.channel);
             continue;
           }
           applyResult(
@@ -259,7 +289,8 @@ export function useMeetingRecorder(): MeetingRecorder {
               : { ok: true, kind: "silence", speech: false },
             Boolean(
               result.ok && result.speech !== false && result.kind !== "silence"
-            )
+            ),
+            sample.channel
           );
         }
       } finally {
@@ -268,7 +299,7 @@ export function useMeetingRecorder(): MeetingRecorder {
       }
     }
 
-    async function tapStream(stream: MediaStream) {
+    async function tapStream(stream: MediaStream, channel: "mic" | "system") {
       const pending: Float32Array[] = [];
       let pendingCount = 0;
       const tap = await attachVoiceTap(context, stream, (input) => {
@@ -283,6 +314,7 @@ export function useMeetingRecorder(): MeetingRecorder {
           pcm: pcmToBytes(pcm),
           rms: rmsInt16(pcm),
           voiced: hasVoicedFrames(merged, context.sampleRate),
+          channel,
         };
         identifyQueue.current.push(sample);
         if (identifyQueue.current.length > MAX_IDENTIFY_QUEUE) {
@@ -296,8 +328,8 @@ export function useMeetingRecorder(): MeetingRecorder {
       tapsRef.current.push(tap);
     }
 
-    void tapStream(mic);
-    if (system) void tapStream(system);
+    void tapStream(mic, "mic");
+    if (system) void tapStream(system, "system");
   }
 
   async function startRecording() {
@@ -308,7 +340,7 @@ export function useMeetingRecorder(): MeetingRecorder {
     resetLiveSpeaker();
 
     try {
-      await window.buddy.resetSpeakerSession?.();
+      await buddy.resetSpeakerSession();
       const pickedMic = await openPreferredMicStream();
       const micStream = pickedMic.stream;
       const systemStream = await getSystemAudioStream();
@@ -367,7 +399,13 @@ export function useMeetingRecorder(): MeetingRecorder {
 
     setPhase("processing");
     setStatus("Saving audio…");
-    resetLiveSpeaker();
+    // Snapshot before clearing — resetLiveSpeaker() wipes liveTurnsRef
+    const turns = liveTurnsRef.current.slice();
+    setLiveSpeaker("");
+    setLiveSpeakerState("listening");
+    setLiveSpeakerTrail([]);
+    identifyQueue.current = [];
+    liveTurnsRef.current = [];
 
     const blob: Blob = await new Promise((resolve) => {
       recorder.onstop = () => {
@@ -380,8 +418,7 @@ export function useMeetingRecorder(): MeetingRecorder {
 
     try {
       const buffer = new Uint8Array(await blob.arrayBuffer());
-      const turns = liveTurnsRef.current.slice();
-      const result = await window.buddy.processMeeting({
+      const result = await buddy.processMeeting({
         buffer,
         mimeType: blob.type || "audio/webm",
         speakerTurns: turns,

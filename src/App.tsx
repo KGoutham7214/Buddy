@@ -1,12 +1,6 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { useEffect, useState } from "react";
 import NotesView from "./NotesView";
 import MeetView from "./MeetView";
-import MangaBubble from "./MangaBubble";
 import { useMeetingRecorder, nowSpeakingLabel } from "./useMeetingRecorder";
 import {
   materializeReminder,
@@ -15,11 +9,20 @@ import {
   type ReminderAction,
   type ReminderDef,
 } from "./reminderCatalog";
-import type { PendingReminderRef } from "./vite-env";
-import { BuddyMark, IconMinus } from "./icons";
+import type { BuddyCapabilities, PendingReminderRef } from "./domain/types";
+import { buddy, hasBuddyApi } from "./api/buddyClient";
+import SettingsDialog from "./SettingsDialog";
+import IconShell, { usePanelDragHandlers } from "./shell/IconShell";
+import PanelShell from "./shell/PanelShell";
 
 type Mode = "icon" | "panel";
 type Tab = "notes" | "meet";
+
+const DESKTOP_CAPABILITIES: BuddyCapabilities = {
+  meet: true,
+  voiceId: true,
+  floatingShell: true,
+};
 
 function formatElapsed(seconds: number) {
   const m = Math.floor(seconds / 60)
@@ -52,6 +55,10 @@ function resolveReminder(pending: PendingReminderRef): ReminderDef | null {
 export default function App() {
   const [mode, setMode] = useState<Mode>("icon");
   const [iconColor, setIconColor] = useState("sand");
+  const [userName, setUserName] = useState("");
+  const [capabilities, setCapabilities] =
+    useState<BuddyCapabilities>(DESKTOP_CAPABILITIES);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("notes");
   const [activeReminder, setActiveReminder] = useState<ReminderDef | null>(
     null
@@ -59,22 +66,20 @@ export default function App() {
   const recorder = useMeetingRecorder();
   const recording =
     recorder.phase === "recording" || recorder.phase === "processing";
-  const dragRef = useRef<{
-    startX: number;
-    startY: number;
-    moved: boolean;
-  } | null>(null);
+  const { onPanelDragDown } = usePanelDragHandlers();
 
   useEffect(() => {
-    if (!window.buddy) return;
-    void window.buddy.getState().then((s) => {
+    if (!hasBuddyApi()) return;
+    void buddy.getState().then((s) => {
       setMode(s.mode === "panel" ? "panel" : "icon");
       if (s.iconColor) setIconColor(s.iconColor);
+      if (typeof s.userName === "string") setUserName(s.userName);
+      if (s.capabilities) setCapabilities(s.capabilities);
     });
-    const offMode = window.buddy.onModeChange((value) => {
+    const offMode = buddy.onModeChange((value) => {
       setMode(value === "panel" ? "panel" : "icon");
     });
-    const offColor = window.buddy.onIconColor((color) => {
+    const offColor = buddy.onIconColor((color) => {
       setIconColor(color);
     });
     return () => {
@@ -84,9 +89,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!window.buddy) return;
-    return window.buddy.onIconMenuAction((action) => {
+    if (!hasBuddyApi()) return;
+    return buddy.onIconMenuAction((action) => {
       if (action === "record") {
+        if (!capabilities.meet) return;
         void recorder.startRecording();
         return;
       }
@@ -101,38 +107,38 @@ export default function App() {
         return;
       }
       if (action === "open") {
-        void openPanel(recording ? "meet" : undefined);
+        void openPanel(recording && capabilities.meet ? "meet" : undefined);
       }
     });
-  }, [recorder, recording]);
+  }, [recorder, recording, capabilities.meet]);
 
   useEffect(() => {
-    if (!window.buddy || recording) return;
+    if (!hasBuddyApi() || recording) return;
     let cancelled = false;
 
     async function loadReminder() {
-      const pending = await window.buddy.listPendingReminders();
+      const pending = await buddy.listPendingReminders();
       if (cancelled) return;
       if (pending.length === 0) {
         setActiveReminder(null);
-        if (mode === "icon") await window.buddy.setReminderBubble(false);
+        if (mode === "icon") await buddy.setReminderBubble(false);
         return;
       }
       const next = resolveReminder(pending[0]);
       if (!next || cancelled) return;
       if (mode === "panel" && pending[0].kind === "task") {
-        await window.buddy.setMode("icon");
+        await buddy.setMode("icon");
         return;
       }
       if (mode !== "icon") return;
       setActiveReminder(next);
-      await window.buddy.setReminderBubble(true);
-      await window.buddy.markReminderShown(next.id);
+      await buddy.setReminderBubble(true);
+      await buddy.markReminderShown(next.id);
     }
 
     void loadReminder();
     const timer = window.setInterval(() => void loadReminder(), 20000);
-    const offDue = window.buddy.onReminderDue(() => void loadReminder());
+    const offDue = buddy.onReminderDue(() => void loadReminder());
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -140,11 +146,21 @@ export default function App() {
     };
   }, [mode, recording]);
 
+  useEffect(() => {
+    if (!capabilities.meet && tab === "meet") setTab("notes");
+  }, [capabilities.meet, tab]);
+
+  useEffect(() => {
+    if (mode === "icon" && !capabilities.floatingShell) {
+      void openPanel();
+    }
+  }, [mode, capabilities.floatingShell]);
+
   async function dismissActiveReminder() {
     if (!activeReminder) return;
     const id = activeReminder.id;
     setActiveReminder(null);
-    await window.buddy.dismissReminder(id);
+    await buddy.dismissReminder(id);
   }
 
   async function handleReminderAction(action: ReminderAction) {
@@ -159,220 +175,101 @@ export default function App() {
     }
     if (action.type === "open-meet") {
       await dismissActiveReminder();
-      await openPanel("meet");
+      await openPanel(capabilities.meet ? "meet" : "notes");
       return;
     }
     if (action.type === "snooze") {
       if (!activeReminder) return;
       const id = activeReminder.id;
       setActiveReminder(null);
-      await window.buddy.snoozeReminder(id, 1);
+      await buddy.snoozeReminder(id, 1);
     }
   }
 
   async function openPanel(nextTab?: Tab) {
     if (activeReminder) {
       setActiveReminder(null);
-      await window.buddy.setReminderBubble(false);
+      await buddy.setReminderBubble(false);
     }
-    if (nextTab) setTab(nextTab);
-    else if (recording) setTab("meet");
-    await window.buddy.setMode("panel");
+    if (nextTab === "meet" && !capabilities.meet) setTab("notes");
+    else if (nextTab) setTab(nextTab);
+    else if (recording && capabilities.meet) setTab("meet");
+    await buddy.setMode("panel");
   }
 
   async function collapse() {
-    await window.buddy.setMode("icon");
-  }
-
-  function onIconPointerDown(e: ReactPointerEvent<HTMLButtonElement>) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-
-    dragRef.current = {
-      startX: e.screenX,
-      startY: e.screenY,
-      moved: false,
-    };
-    window.buddy.dragStart({ screenX: e.screenX, screenY: e.screenY });
-
-    const onMove = (ev: PointerEvent) => {
-      const drag = dragRef.current;
-      if (!drag) return;
-      const dx = Math.abs(ev.screenX - drag.startX);
-      const dy = Math.abs(ev.screenY - drag.startY);
-      if (dx > 6 || dy > 6) {
-        drag.moved = true;
-      }
-      if (drag.moved) {
-        window.buddy.dragMove({ screenX: ev.screenX, screenY: ev.screenY });
-      }
-    };
-
-    const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      const drag = dragRef.current;
-      dragRef.current = null;
-      window.buddy.dragEnd();
-      try {
-        e.currentTarget.releasePointerCapture(ev.pointerId);
-      } catch {
-        /* already released */
-      }
-      if (drag && !drag.moved) {
-        void openPanel(recording ? "meet" : undefined);
-      }
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-  }
-
-  function onPanelDragDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (target.closest("button, input, textarea, a")) return;
-
-    e.preventDefault();
-    window.buddy.dragStart({ screenX: e.screenX, screenY: e.screenY });
-
-    const onMove = (ev: PointerEvent) => {
-      window.buddy.dragMove({ screenX: ev.screenX, screenY: ev.screenY });
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.buddy.dragEnd();
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    setSettingsOpen(false);
+    await buddy.setMode("icon");
   }
 
   if (mode !== "panel") {
+    if (!capabilities.floatingShell) {
+      return null;
+    }
     return (
-      <div
-        className={`collapsed-root color-${iconColor} ${recording ? "recording" : ""} ${
-          activeReminder ? "with-bubble" : ""
-        }`}
-      >
-        {activeReminder ? (
-          <MangaBubble
-            reminder={activeReminder}
-            onAction={(action) => void handleReminderAction(action)}
-            onClose={() => void dismissActiveReminder()}
-          />
-        ) : null}
-        <button
-          className={`icon-orb color-${iconColor} ${recording ? "recording" : ""}`}
-          aria-label={
-            recorder.phase === "recording"
-              ? `Recording ${formatElapsed(recorder.elapsed)} — click to open`
-              : "Open Buddy"
-          }
-          title={
-            recorder.phase === "recording"
-              ? `Recording ${formatElapsed(recorder.elapsed)} — ${nowSpeakingLabel(
-                  recorder.liveSpeakerState,
-                  recorder.liveSpeaker
-                )}`
-              : recorder.phase === "processing"
-                ? "Processing meeting…"
-                : "Open Buddy"
-          }
-          onPointerDown={onIconPointerDown}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            window.buddy.showIconMenu({
-              phase: recorder.phase,
-              x: Math.round(e.clientX),
-              y: Math.round(e.clientY),
-            });
-          }}
-        >
-          <BuddyMark className="icon-mark" />
-          {recorder.phase === "recording" && recorder.liveSpeakerTrail.length > 0 ? (
-            <span className="icon-speaker-strip" aria-hidden>
-              {recorder.liveSpeakerTrail.map((name) => (
-                <span
-                  key={name}
-                  className={`icon-speaker-box ${
-                    recorder.liveSpeakerState === "name" &&
-                    recorder.liveSpeaker === name
-                      ? "active"
-                      : ""
-                  }`}
-                  style={{ background: speakerColor(name) }}
-                />
-              ))}
-            </span>
-          ) : null}
-          {recorder.phase === "recording" ? (
-            <span className="icon-rec-time">{formatElapsed(recorder.elapsed)}</span>
-          ) : null}
-        </button>
-      </div>
+      <IconShell
+        iconColor={iconColor}
+        recording={recording}
+        phase={recorder.phase}
+        elapsed={recorder.elapsed}
+        liveSpeaker={recorder.liveSpeaker}
+        liveSpeakerState={recorder.liveSpeakerState}
+        liveSpeakerTrail={recorder.liveSpeakerTrail}
+        activeReminder={activeReminder}
+        formatElapsed={formatElapsed}
+        nowSpeakingLabel={nowSpeakingLabel}
+        speakerColor={speakerColor}
+        onOpen={() =>
+          void openPanel(recording && capabilities.meet ? "meet" : undefined)
+        }
+        onReminderAction={(action) => void handleReminderAction(action)}
+        onReminderClose={() => void dismissActiveReminder()}
+      />
     );
   }
 
   return (
-    <div className={`app-shell theme-${iconColor}`}>
-      <div className="panel">
-        <div className="titlebar" onPointerDown={onPanelDragDown}>
-          <div className="titlebar-brand">
-            <div className={`brand-dot ${recording ? "recording" : ""}`}>
-              <BuddyMark />
-            </div>
-            <span className="brand-name">Buddy</span>
-            {recorder.phase === "recording" ? (
-              <span className="title-rec">
-                REC {formatElapsed(recorder.elapsed)}
-                {` · ${
-                  recorder.liveSpeakerState === "name" && recorder.liveSpeaker
-                    ? `Now: ${recorder.liveSpeaker}`
-                    : nowSpeakingLabel(
-                        recorder.liveSpeakerState,
-                        recorder.liveSpeaker
-                      )
-                }`}
-              </span>
-            ) : null}
-          </div>
-          <div className="titlebar-actions">
-            <button
-              className="icon-btn"
-              title="Minimize to icon (recording continues)"
-              onClick={() => void collapse()}
-            >
-              <IconMinus />
-            </button>
-          </div>
-        </div>
-
-        <div className="tabs">
-          <button
-            className={`tab ${tab === "notes" ? "active" : ""}`}
-            onClick={() => setTab("notes")}
-          >
-            Notes
-          </button>
-          <button
-            className={`tab ${tab === "meet" ? "active" : ""}`}
-            onClick={() => setTab("meet")}
-          >
-            Meet
-            {recorder.phase === "recording" ? (
-              <span className="tab-rec-dot" aria-hidden />
-            ) : null}
-          </button>
-        </div>
-
-        {tab === "notes" ? <NotesView /> : <MeetView recorder={recorder} />}
-      </div>
-    </div>
+    <PanelShell
+      theme={iconColor}
+      userName={userName}
+      recording={recording}
+      showMeetTab={capabilities.meet}
+      tab={tab}
+      onTabChange={setTab}
+      phase={recorder.phase}
+      elapsed={recorder.elapsed}
+      liveSpeaker={recorder.liveSpeaker}
+      liveSpeakerState={recorder.liveSpeakerState}
+      formatElapsed={formatElapsed}
+      nowSpeakingLabel={nowSpeakingLabel}
+      onPanelDragDown={onPanelDragDown}
+      onOpenSettings={() => setSettingsOpen(true)}
+      onCollapse={() => void collapse()}
+      settings={
+        <SettingsDialog
+          open={settingsOpen}
+          theme={iconColor}
+          userName={userName}
+          micBusy={recording}
+          showVoiceId={capabilities.voiceId}
+          showMeetModels={capabilities.meet}
+          onClose={() => setSettingsOpen(false)}
+          onThemeChange={(id) => {
+            setIconColor(id);
+            void buddy.setIconColor(id);
+          }}
+          onUserNameSave={async (value) => {
+            const saved = await buddy.setUserName(value);
+            setUserName(saved);
+          }}
+        />
+      }
+    >
+      {tab === "notes" || !capabilities.meet ? (
+        <NotesView />
+      ) : (
+        <MeetView recorder={recorder} />
+      )}
+    </PanelShell>
   );
 }

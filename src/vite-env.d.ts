@@ -1,79 +1,37 @@
 /// <reference types="vite/client" />
 
-export type Note = {
-  id: string;
-  title: string;
-  body: string;
-  kind?: "note" | "meeting";
-  transcript?: string;
-  summary?: string;
-  summaryError?: string;
-  keyPoints?: string[];
-  decisions?: string[];
-  audioPath?: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
+export type {
+  Note,
+  Task,
+  ReminderAction,
+  ReminderActionButton,
+  ReminderDef,
+  PendingReminderRef,
+  VoiceProfile,
+  AppMode,
+  BuddyCapabilities,
+} from "./domain/types";
 
-export type Task = {
-  id: string;
-  title: string;
-  done: boolean;
-  parentId: string | null;
-  noteId: string | null;
-  remindAt?: string | null;
-  order: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ReminderAction =
-  | { type: "dismiss" }
-  | { type: "snooze" }
-  | { type: "open-notes" }
-  | { type: "open-meet" };
-
-export type ReminderActionButton = {
-  label: string;
-  action: ReminderAction;
-  style?: "primary" | "ghost";
-};
-
-export type ReminderDef = {
-  id: string;
-  frequency: "daily" | "once" | "always";
-  speaker: string;
-  lines: string[];
-  stamp?: string;
-  actions?: ReminderActionButton[];
-};
-
-export type PendingReminderRef = {
-  id: string;
-  kind?: "catalog" | "task";
-  frequency: string;
-  dayKey: string;
-  taskId?: string;
-  title?: string;
-};
-
-export type VoiceProfile = {
-  id: string;
-  name: string;
-  backend?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type AppMode = "icon" | "panel";
+import type {
+  Note,
+  Task,
+  PendingReminderRef,
+  VoiceProfile,
+  AppMode,
+  BuddyCapabilities,
+} from "./domain/types";
 
 export type BuddyApi = {
   getState: () => Promise<{
     mode: AppMode;
     userDataPath: string;
     iconColor?: string;
+    userName?: string;
+    capabilities: BuddyCapabilities;
   }>;
   setMode: (mode: AppMode) => Promise<AppMode>;
+  setIconColor: (id: string) => Promise<string>;
+  setUserName: (value: string) => Promise<string>;
   dragStart: (payload: { screenX: number; screenY: number }) => void;
   dragMove: (payload: { screenX: number; screenY: number }) => void;
   dragEnd: () => void;
@@ -129,10 +87,25 @@ export type BuddyApi = {
     speakers?: { ok: boolean; error?: string; backend?: string };
     qdrant?: { ok: boolean; error?: string };
   }>;
+  getMeetSettings: () => Promise<{
+    ok: boolean;
+    whisperModel: string;
+    ollamaModel: string;
+    whisperModels: string[];
+  }>;
+  setMeetSettings: (payload: {
+    whisperModel?: string;
+    ollamaModel?: string;
+  }) => Promise<{
+    ok: boolean;
+    whisperModel: string;
+    ollamaModel: string;
+  }>;
   listVoices: () => Promise<VoiceProfile[]>;
   enrollVoice: (payload: {
     name: string;
-    pcm: Uint8Array;
+    pcm?: Uint8Array;
+    passes?: Uint8Array[];
     sampleRate?: number;
   }) => Promise<{ ok: boolean; voice?: VoiceProfile; error?: string }>;
   deleteVoice: (id: string) => Promise<boolean>;

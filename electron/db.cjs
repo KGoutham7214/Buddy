@@ -2,12 +2,20 @@ const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
 
+/** Current buddy-data.json schema. Bump when the on-disk shape changes. */
+const SCHEMA_VERSION = 1;
+
+/**
+ * Notes and tasks always carry id + createdAt + updatedAt (ISO strings).
+ * Migrate on load so older files gain schemaVersion without a rewrite.
+ */
 function createDb(userDataPath) {
   const dbPath = path.join(userDataPath, "buddy-data.json");
   const configPath = path.join(userDataPath, "buddy-config.json");
   const recordingsDir = path.join(userDataPath, "recordings");
 
   const defaultData = () => ({
+    schemaVersion: SCHEMA_VERSION,
     notes: [],
     tasks: [],
     voices: [],
@@ -27,9 +35,37 @@ function createDb(userDataPath) {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
   }
 
+  function migrate(data) {
+    let changed = false;
+    const next = data && typeof data === "object" ? data : defaultData();
+
+    if (!Array.isArray(next.notes)) {
+      next.notes = [];
+      changed = true;
+    }
+    if (!Array.isArray(next.tasks)) {
+      next.tasks = [];
+      changed = true;
+    }
+    // Legacy local voice roster; live Voice ID uses Qdrant.
+    if (!Array.isArray(next.voices)) {
+      next.voices = [];
+      changed = true;
+    }
+
+    const version = Number(next.schemaVersion) || 0;
+    if (version < SCHEMA_VERSION) {
+      next.schemaVersion = SCHEMA_VERSION;
+      changed = true;
+    }
+
+    return { data: next, changed };
+  }
+
   function load() {
-    const data = readJson(dbPath, defaultData);
-    if (!Array.isArray(data.voices)) data.voices = [];
+    const raw = readJson(dbPath, defaultData);
+    const { data, changed } = migrate(raw);
+    if (changed) save(data);
     return data;
   }
 
@@ -44,6 +80,7 @@ function createDb(userDataPath) {
   }
 
   function save(data) {
+    if (!data.schemaVersion) data.schemaVersion = SCHEMA_VERSION;
     writeJson(dbPath, data);
   }
 

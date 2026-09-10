@@ -198,20 +198,47 @@ def _cosine(a, b) -> float:
     return float(np.dot(x, y) / denom)
 
 
+MIN_ABS_RMS = 0.004
+VAD_NOISE_MULT = 2.0
+TARGET_EMBED_RMS = 0.1
+NOISE_WINDOW_S = 0.3
+MIN_ENROLL_WINDOWS = 1
+MAX_ENROLL_WINDOWS = 8
+ENROLL_OUTLIER_COS = 0.55
+# Shared enroll/live windowing
+EMBED_WIN_S = 2.0
+EMBED_HOP_S = 0.75
+MIN_EMBED_SECONDS = 0.8
+# Absolute gate when noise can't be estimated (continuous speech).
+SPEECH_ABS_RMS = 0.008
+
+
+def _resample_to_16k(wav, sample_rate: int):
+    import numpy as np
+
+    if not sample_rate or sample_rate == 16000:
+        return wav.astype(np.float32, copy=False)
+    duration = wav.shape[0] / float(sample_rate)
+    target = max(1, int(round(duration * 16000)))
+    if target == wav.shape[0]:
+        return wav.astype(np.float32, copy=False)
+    x_old = np.linspace(0.0, 1.0, num=wav.shape[0], endpoint=False)
+    x_new = np.linspace(0.0, 1.0, num=target, endpoint=False)
+    # Cubic-ish via linear on denser grid: interp is fine; avoid zero-order hold.
+    return np.interp(x_new, x_old, wav).astype(np.float32)
+
+
 def _as_16k_float(pcm_b64: str, sample_rate: int):
     import numpy as np
 
     raw = base64.b64decode(pcm_b64)
     wav = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    if sample_rate and sample_rate != 16000:
-        duration = wav.shape[0] / float(sample_rate)
-        target = max(1, int(duration * 16000))
-        x_old = np.linspace(0.0, 1.0, num=wav.shape[0], endpoint=False)
-        x_new = np.linspace(0.0, 1.0, num=target, endpoint=False)
-        wav = np.interp(x_new, x_old, wav).astype(np.float32)
-    min_len = int(1.2 * 16000)
+    wav = _resample_to_16k(wav, sample_rate)
+    min_len = int(MIN_EMBED_SECONDS * 16000)
     if wav.shape[0] < min_len:
-        wav = np.pad(wav, (0, min_len - wav.shape[0]))
+        raise ValueError(
+            f"Clip too short for voice print ({wav.shape[0] / 16000:.2f}s)"
+        )
     return wav
 
 
@@ -228,34 +255,52 @@ def embed_wav(wav) -> list[float]:
     return _l2(out[0])
 
 
-MIN_ABS_RMS = 0.006
-VAD_NOISE_MULT = 3.0
-TARGET_EMBED_RMS = 0.1
-NOISE_WINDOW_S = 0.3
-MIN_ENROLL_WINDOWS = 1
-MAX_ENROLL_WINDOWS = 8
-ENROLL_OUTLIER_COS = 0.42
+def _frame_rms(wav, sr: int, start: int, end: int) -> list[float]:
+    hop = max(1, int(0.02 * sr))
+    floors = []
+    for i in range(start, max(start, end - hop) + 1, hop):
+        floors.append(rms(wav[i : i + hop]))
+    return floors
 
 
 def noise_floor(wav, sr: int = 16000) -> float:
-    import numpy as np
+    """Estimate background level.
 
-    hop = max(1, int(0.02 * sr))
-    limit = min(wav.shape[0], int(NOISE_WINDOW_S * sr))
-    if limit < hop:
-        return max(MIN_ABS_RMS, rms(wav))
-    floors = []
-    for start in range(0, limit - hop + 1, hop):
-        floors.append(rms(wav[start : start + hop]))
+    Continuous speech fills the first 0.3s, so a naive probe treats speech as
+    noise and sets a threshold ~3x speech — every window then fails. Cap against
+    overall level and fall back to an absolute floor when no quiet exists.
+    """
+    overall = rms(wav)
+    if overall < 1e-8:
+        return MIN_ABS_RMS
+
+    probe = min(wav.shape[0], int(NOISE_WINDOW_S * sr))
+    floors = _frame_rms(wav, sr, 0, probe)
+    # Also sample mid/late regions in case speech starts immediately.
+    if wav.shape[0] > probe * 2:
+        mid = wav.shape[0] // 2
+        floors.extend(_frame_rms(wav, sr, mid, min(wav.shape[0], mid + probe)))
+    if wav.shape[0] > probe:
+        floors.extend(
+            _frame_rms(wav, sr, max(0, wav.shape[0] - probe), wav.shape[0])
+        )
     if not floors:
-        return max(MIN_ABS_RMS, rms(wav[:limit]))
+        return MIN_ABS_RMS
+
     floors.sort()
-    quiet = floors[len(floors) // 5]
-    return max(MIN_ABS_RMS, float(quiet))
+    quiet = float(floors[len(floors) // 5])
+    # If the "quiet" percentile is still most of the signal, there was no pause.
+    if quiet >= overall * 0.45:
+        return MIN_ABS_RMS
+    return max(MIN_ABS_RMS, min(quiet, overall * 0.4))
 
 
-def speech_threshold(noise: float) -> float:
-    return max(MIN_ABS_RMS, noise * VAD_NOISE_MULT)
+def speech_threshold(noise: float, signal: float | None = None) -> float:
+    thr = max(SPEECH_ABS_RMS, noise * VAD_NOISE_MULT)
+    if signal is not None and signal > 0:
+        # Never require louder than ~half the clip — continuous talkers must pass.
+        thr = min(thr, max(SPEECH_ABS_RMS, signal * 0.4))
+    return thr
 
 
 def normalize_rms(wav):
@@ -272,12 +317,13 @@ def normalize_rms(wav):
     return scaled.astype(np.float32)
 
 
-def voiced_windows(wav, sr: int = 16000, win: float = 2.0, hop: float = 0.75):
+def voiced_windows(wav, sr: int = 16000, win: float = EMBED_WIN_S, hop: float = EMBED_HOP_S):
     win_n = int(win * sr)
     hop_n = int(hop * sr)
-    threshold = speech_threshold(noise_floor(wav, sr))
+    overall = rms(wav)
+    threshold = speech_threshold(noise_floor(wav, sr), overall)
     if wav.shape[0] <= win_n:
-        if rms(wav) >= threshold:
+        if overall >= threshold:
             yield wav
         return
     for start in range(0, wav.shape[0] - win_n + 1, hop_n):
@@ -290,7 +336,8 @@ def embed_enroll(wav) -> tuple[list[list[float]] | None, int]:
     import numpy as np
 
     raw = [np.asarray(embed_wav(clip), dtype=np.float64) for clip in voiced_windows(wav)]
-    if not raw and rms(wav) >= speech_threshold(noise_floor(wav)):
+    # Absolute fallback: continuous speech often has no quiet reference.
+    if not raw and rms(wav) >= SPEECH_ABS_RMS:
         raw = [np.asarray(embed_wav(wav), dtype=np.float64)]
     windows = len(raw)
     if windows < MIN_ENROLL_WINDOWS:
@@ -315,9 +362,9 @@ def embed_live(wav) -> tuple[list[list[float]] | None, bool]:
     import numpy as np
 
     # Average several voiced windows so matching is the voice, not the words.
-    clips = list(voiced_windows(wav, win=2.0, hop=0.5))
+    clips = list(voiced_windows(wav, win=EMBED_WIN_S, hop=EMBED_HOP_S))
     if not clips:
-        if rms(wav) >= speech_threshold(noise_floor(wav)):
+        if rms(wav) >= SPEECH_ABS_RMS:
             return [embed_wav(wav)], True
         return None, False
     clips.sort(key=rms, reverse=True)

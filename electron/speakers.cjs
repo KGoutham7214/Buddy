@@ -32,10 +32,10 @@ function thresholds(backend) {
   if (backend === "campplus") {
     const enrolledOverride =
       tuning && typeof tuning.campplusEnrolled === "number"
-        ? clampNumber(tuning.campplusEnrolled, 0.2, 0.65)
+        ? clampNumber(tuning.campplusEnrolled, 0.2, 0.42)
         : null;
     return {
-      enrolled: enrolledOverride ?? 0.4,
+      enrolled: enrolledOverride ?? 0.34,
       unknown: 0.5,
       margin: 0.04,
     };
@@ -99,18 +99,16 @@ function matchFromSearch(embedding, hits, unknowns, backend, clusterUnknowns) {
   const best = ranked[0] || null;
   const second = ranked[1] || null;
   const otherScore = second ? second.score : -1;
+  // One enrolled voice: keep floor soft — live windows rarely hit a tight print.
   const adaptiveFloor =
-    backend === "campplus" && ranked.length <= 1 ? Math.min(enrolled, 0.34) : enrolled;
+    backend === "campplus" && ranked.length <= 1
+      ? Math.min(enrolled, 0.34)
+      : enrolled;
   const clear =
     best &&
     best.label &&
     best.score >= adaptiveFloor &&
     (otherScore < 0 || best.score - otherScore >= margin);
-  const singleSpeakerNearMatch =
-    best &&
-    best.label &&
-    ranked.length === 1 &&
-    best.score >= Math.max(0.3, adaptiveFloor - 0.03);
   if (clear) {
     return {
       label: best.label,
@@ -126,6 +124,12 @@ function matchFromSearch(embedding, hits, unknowns, backend, clusterUnknowns) {
       unknowns,
     };
   }
+
+  const singleSpeakerNearMatch =
+    best &&
+    best.label &&
+    ranked.length === 1 &&
+    best.score >= Math.max(0.28, adaptiveFloor - 0.04);
   if (singleSpeakerNearMatch) {
     return {
       label: best.label,
@@ -491,7 +495,12 @@ function labelFromLiveTurns(segment, turns) {
   let best = null;
   let bestOverlap = 0;
   for (const turn of turns || []) {
-    if (turn.kind !== "enrolled" || !turn.label) continue;
+    if (
+      (turn.kind !== "enrolled" && turn.kind !== "unknown") ||
+      !turn.label
+    ) {
+      continue;
+    }
     const overlap = Math.min(end, Number(turn.end) || 0) - Math.max(start, Number(turn.start) || 0);
     if (overlap > bestOverlap) {
       bestOverlap = overlap;

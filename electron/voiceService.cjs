@@ -11,6 +11,20 @@ function init(database) {
 
 function applyTuning() {
   const tuning = db?.getConfig?.().voiceTuning || {};
+  // Phase-3 floors (0.48+) rejected almost every live match — soften once.
+  if (
+    typeof tuning.campplusEnrolled === "number" &&
+    tuning.campplusEnrolled > 0.42
+  ) {
+    const next = {
+      ...tuning,
+      campplusEnrolled: 0.34,
+      updatedAt: new Date().toISOString(),
+    };
+    db.setConfig({ voiceTuning: next });
+    speakers.setTuning(next);
+    return;
+  }
   speakers.setTuning(tuning);
 }
 
@@ -28,7 +42,8 @@ function recommendedCampplusFloor(embeddings) {
     .filter((score) => Number.isFinite(score) && score > 0);
   if (sims.length === 0) return null;
   const avg = sims.reduce((sum, score) => sum + score, 0) / sims.length;
-  return clamp(avg - 0.24, 0.22, 0.48);
+  // Leave headroom under typical live scores (often 0.32–0.45 on headset).
+  return clamp(avg - 0.18, 0.28, 0.42);
 }
 
 function toPcmBuffer(pcm) {
@@ -87,9 +102,7 @@ async function deleteVoice(id) {
 
 async function enrollVoice(payload) {
   const name = String(payload?.name || "").trim();
-  const pcm = toPcmBuffer(payload?.pcm);
   if (!name) return { ok: false, error: "Name is required" };
-  if (!pcm) return { ok: false, error: "No voice sample received" };
   const reachable = await qdrant.check();
   if (!reachable.ok) {
     return {
@@ -97,26 +110,68 @@ async function enrollVoice(payload) {
       error: reachable.error || "Start Qdrant locally (http://127.0.0.1:6333)",
     };
   }
-  const embedded = await speakers.embedPcm(
-    pcm,
-    payload?.sampleRate || 16000,
-    true
-  );
-  if (!embedded.ok) return embedded;
-  if (embedded.backend && embedded.backend !== "campplus") {
+
+  const passBuffers = [];
+  if (Array.isArray(payload?.passes) && payload.passes.length > 0) {
+    for (const part of payload.passes) {
+      const buf = toPcmBuffer(part);
+      if (buf) passBuffers.push(buf);
+    }
+  } else {
+    const pcm = toPcmBuffer(payload?.pcm);
+    if (pcm) passBuffers.push(pcm);
+  }
+  if (passBuffers.length === 0) {
+    return { ok: false, error: "No voice sample received" };
+  }
+
+  const sampleRate = payload?.sampleRate || 16000;
+  const collected = [];
+  let backend = "";
+  for (const pcm of passBuffers) {
+    const embedded = await speakers.embedPcm(pcm, sampleRate, true);
+    if (!embedded.ok) return embedded;
+    if (embedded.backend && embedded.backend !== "campplus") {
+      return {
+        ok: false,
+        error:
+          "Voice ID needs CampPlus. Run: pip install onnxruntime kaldi-native-fbank",
+      };
+    }
+    backend = embedded.backend || backend;
+    const vecs = embedded.embeddings || [];
+    // embed_enroll appends a per-pass centroid last — keep clip vectors only
+    const clips = vecs.length > 1 ? vecs.slice(0, -1) : vecs;
+    for (const vec of clips) {
+      if (Array.isArray(vec) && vec.length > 0) collected.push(vec);
+    }
+  }
+  if (collected.length < 2) {
     return {
       ok: false,
-      error: "Voice ID needs CampPlus. Run: pip install onnxruntime kaldi-native-fbank",
+      error: "Didn't hear enough speech across passes — try again closer to the mic.",
     };
   }
+
+  // Rebuild centroid as last vector for recommendedCampplusFloor / upsert convention
+  const dim = collected[0].length;
+  const centroid = new Array(dim).fill(0);
+  for (const vec of collected) {
+    for (let i = 0; i < dim; i++) centroid[i] += vec[i];
+  }
+  for (let i = 0; i < dim; i++) centroid[i] /= collected.length;
+  const norm = Math.sqrt(centroid.reduce((sum, v) => sum + v * v, 0)) || 1;
+  const unitCentroid = centroid.map((v) => v / norm);
+  const embeddings = [...collected, unitCentroid];
+
   const saved = await qdrant.upsertVoices({
     name,
-    embeddings: embedded.embeddings || [embedded.embedding],
-    backend: embedded.backend,
+    embeddings,
+    backend,
   });
   if (!saved.ok) return saved;
-  if (embedded.backend === "campplus") {
-    const floor = recommendedCampplusFloor(embedded.embeddings || []);
+  if (backend === "campplus") {
+    const floor = recommendedCampplusFloor(embeddings);
     if (typeof floor === "number") {
       const current = db.getConfig().voiceTuning || {};
       db.setConfig({
