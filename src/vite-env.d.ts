@@ -27,11 +27,14 @@ export type BuddyApi = {
     userDataPath: string;
     iconColor?: string;
     userName?: string;
+    openAtLogin?: boolean;
     capabilities: BuddyCapabilities;
   }>;
   setMode: (mode: AppMode) => Promise<AppMode>;
   setIconColor: (id: string) => Promise<string>;
   setUserName: (value: string) => Promise<string>;
+  getAutoStart: () => Promise<{ openAtLogin: boolean }>;
+  setAutoStart: (enabled: boolean) => Promise<{ openAtLogin: boolean }>;
   dragStart: (payload: { screenX: number; screenY: number }) => void;
   dragMove: (payload: { screenX: number; screenY: number }) => void;
   dragEnd: () => void;

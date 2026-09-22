@@ -16,6 +16,7 @@ const speakers = require("./speakers.cjs");
 const qdrant = require("./qdrant.cjs");
 const voiceService = require("./voiceService.cjs");
 const meetingPipeline = require("./meetingPipeline.cjs");
+const autostart = require("./autostart.cjs");
 
 const ICON_SIZE = 52;
 const PANEL_WIDTH = 400;
@@ -592,102 +593,23 @@ function createWindow() {
   });
 }
 
-function quotePs(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function enableAutoStart() {
-  // Dual login path: delayed Scheduled Task + HKCU Run. Both call the same
-  // PowerShell launcher (cmd `timeout` is broken under Task Scheduler).
-  // Single-instance lock prevents two icons if both fire.
-  const root = path.resolve(path.join(__dirname, ".."));
-  const userData = app.getPath("userData");
-  const electronExe = process.execPath;
-  const srcLauncher = path.join(root, "scripts", "autostart-buddy.ps1");
-  const destLauncher = path.join(userData, "autostart-buddy.ps1");
-  const wrapperPath = path.join(userData, "start-buddy.ps1");
-  const logPath = path.join(userData, "autostart.log");
-  const pidPath = path.join(userData, "buddy.pid");
-
-  try {
-    fs.mkdirSync(userData, { recursive: true });
-    fs.copyFileSync(srcLauncher, destLauncher);
-    const wrapper = [
-      "$ErrorActionPreference = 'Continue'",
-      `& ${quotePs(destLauncher)} -Root ${quotePs(root)} -Electron ${quotePs(electronExe)} -Log ${quotePs(logPath)} -PidFile ${quotePs(pidPath)}`,
-      "exit $LASTEXITCODE",
-      "",
-    ].join("\r\n");
-    fs.writeFileSync(wrapperPath, wrapper, "utf8");
-  } catch (err) {
-    console.error("Failed to write Buddy autostart launcher", err);
-    return;
-  }
-
-  try {
-    app.setLoginItemSettings({ openAtLogin: false });
-    app.setLoginItemSettings({
-      openAtLogin: false,
-      path: process.execPath,
-      args: [root],
-    });
-  } catch {
-    // ignore
-  }
-
-  try {
-    const { spawnSync } = require("child_process");
-    const ps1Path = path.join(userData, "register-autostart.ps1");
-    const safeWrapper = wrapperPath.replace(/'/g, "''");
-    fs.writeFileSync(
-      ps1Path,
-      [
-        "$ErrorActionPreference = 'Stop'",
-        "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'electron.app.Electron' -ErrorAction SilentlyContinue",
-        "$startupCmd = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Buddy.cmd'",
-        "Remove-Item -Path $startupCmd -Force -ErrorAction SilentlyContinue",
-        "Remove-Item -LiteralPath (Join-Path $env:APPDATA 'buddy\\autostart-buddy.cmd') -Force -ErrorAction SilentlyContinue",
-        `$wrapper = '${safeWrapper}'`,
-        `$arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $wrapper + '"'`,
-        "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'Buddy' -Value ('powershell.exe ' + $arg)",
-        "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg",
-        "$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME",
-        "$trigger.Delay = 'PT75S'",
-        "try { $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::FromMinutes(15)) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) } catch { $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::FromMinutes(15)) }",
-        "Register-ScheduledTask -TaskName 'BuddyAutostart' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
-        "Write-Output 'registered BuddyAutostart'",
-      ].join("\r\n"),
-      "utf8"
-    );
-
-    const result = spawnSync(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path],
-      { windowsHide: true, encoding: "utf8" }
-    );
-    if (result.status !== 0) {
-      console.error(
-        "Failed to register Buddy autostart",
-        result.stderr || result.stdout
-      );
-    }
-  } catch (err) {
-    console.error("Failed to enable Buddy autostart", err);
-  }
-}
-
 function registerIpc() {
   ipcMain.handle("app:getState", () => ({
     mode,
     userDataPath: app.getPath("userData"),
     iconColor: iconThemeId(),
     userName: currentUserName(),
+    openAtLogin: autostart.getAutoStart(app, db).openAtLogin,
     capabilities: {
       meet: true,
       voiceId: true,
       floatingShell: true,
     },
   }));
+  ipcMain.handle("app:getAutoStart", () => autostart.getAutoStart(app, db));
+  ipcMain.handle("app:setAutoStart", (_e, enabled) =>
+    autostart.setAutoStart(app, db, Boolean(enabled))
+  );
   ipcMain.handle("app:setIconColor", (_e, id) => setIconColor(id));
   ipcMain.handle("app:setUserName", (_e, value) => setUserName(value));
   ipcMain.handle("app:setColorPicker", (_e, active) =>
@@ -1033,12 +955,12 @@ app.whenReady().then(() => {
       win.webContents.send("reminders:due");
     }
   }, 20000);
-  // Register login task after UI is up so a permission hiccup can't block launch
+  // Apply silent login autostart after UI is up
   setTimeout(() => {
     try {
-      enableAutoStart();
+      autostart.applyAutoStartFromConfig(app, db);
     } catch (err) {
-      console.error("enableAutoStart failed", err);
+      console.error("applyAutoStartFromConfig failed", err);
     }
   }, 1500);
 
