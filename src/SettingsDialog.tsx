@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { IconClose } from "./icons";
 import VoiceIdSettings from "./VoiceIdSettings";
 import MeetModelsSettings from "./MeetModelsSettings";
+import { buddy } from "./api/buddyClient";
 
 export const THEME_OPTIONS = [
   { id: "sand", label: "Sand", swatch: "#c4a574" },
@@ -37,11 +38,16 @@ export default function SettingsDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const [draftName, setDraftName] = useState(userName);
   const [saving, setSaving] = useState(false);
+  const [openAtLogin, setOpenAtLogin] = useState(true);
+  const [autoStartBusy, setAutoStartBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setDraftName(userName);
     const t = window.setTimeout(() => inputRef.current?.focus(), 40);
+    void buddy.getAutoStart().then((s) => {
+      if (typeof s?.openAtLogin === "boolean") setOpenAtLogin(s.openAtLogin);
+    });
     return () => window.clearTimeout(t);
   }, [open, userName]);
 
@@ -66,6 +72,20 @@ export default function SettingsDialog({
       await onUserNameSave(draftName);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function toggleAutoStart(next: boolean) {
+    if (autoStartBusy) return;
+    setAutoStartBusy(true);
+    setOpenAtLogin(next);
+    try {
+      const saved = await buddy.setAutoStart(next);
+      setOpenAtLogin(Boolean(saved?.openAtLogin));
+    } catch {
+      setOpenAtLogin(!next);
+    } finally {
+      setAutoStartBusy(false);
     }
   }
 
@@ -157,6 +177,24 @@ export default function SettingsDialog({
             </div>
             <p className="settings-hint">
               Shown in the title bar. Leave blank to hide it.
+            </p>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-label">Startup</div>
+            <label className="settings-toggle-row" htmlFor="settings-autostart">
+              <input
+                id="settings-autostart"
+                type="checkbox"
+                checked={openAtLogin}
+                disabled={autoStartBusy}
+                onChange={(e) => void toggleAutoStart(e.target.checked)}
+              />
+              <span>Start at login</span>
+            </label>
+            <p className="settings-hint">
+              Opens the Buddy icon when you sign in — no Terminal or PowerShell
+              window.
             </p>
           </section>
 

@@ -762,6 +762,23 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-toggle-row input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--brand);
+}
+
 .settings-voices .voices-hint-inline {
   margin: 0 0 8px;
 }

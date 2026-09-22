@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("buddy", {
   setMode: (mode) => ipcRenderer.invoke("app:setMode", mode),
   setIconColor: (id) => ipcRenderer.invoke("app:setIconColor", id),
   setUserName: (value) => ipcRenderer.invoke("app:setUserName", value),
+  getAutoStart: () => ipcRenderer.invoke("app:getAutoStart"),
+  setAutoStart: (enabled) => ipcRenderer.invoke("app:setAutoStart", enabled),
 
   dragStart: (payload) => ipcRenderer.send("window:drag-start", payload),
   dragMove: (payload) => ipcRenderer.send("window:drag-move", payload),

@@ -1,7 +1,8 @@
-' Silent login launcher for Buddy (handles paths with spaces).
+' Silent login launcher for Buddy (no console / Terminal window).
+' Prefer Settings → Start at login. This script is a manual fallback.
 Option Explicit
 
-Dim shell, fso, root, electron, distIndex, buildCmd
+Dim shell, fso, root, electron, distIndex
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
@@ -16,8 +17,8 @@ End If
 shell.CurrentDirectory = root
 
 If Not fso.FileExists(distIndex) Then
-  buildCmd = "cmd /c npm run build"
-  shell.Run buildCmd, 0, True
+  ' Build once if needed — hidden cmd window (0)
+  shell.Run "cmd /c npm run build", 0, True
 End If
 
 If Not fso.FileExists(distIndex) Then
