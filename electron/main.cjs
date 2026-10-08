@@ -9,13 +9,14 @@ const {
 const path = require("path");
 const fs = require("fs");
 const { createDb } = require("./db.cjs");
-const { checkWhisper } = require("./transcribe.cjs");
+const { checkWhisper, stop: stopWhisper } = require("./transcribe.cjs");
 const { checkOllama } = require("./ollama.cjs");
 const reminders = require("./reminders.cjs");
 const speakers = require("./speakers.cjs");
 const qdrant = require("./qdrant.cjs");
 const voiceService = require("./voiceService.cjs");
 const meetingPipeline = require("./meetingPipeline.cjs");
+const diarize = require("./diarize.cjs");
 const autostart = require("./autostart.cjs");
 
 const ICON_SIZE = 52;
@@ -79,17 +80,8 @@ function iconIdleBg() {
   );
 }
 
-function iconWindowBg() {
-  if (bubbleActive) return "#f4efe6";
-  if (colorPickerActive) return "#1a1c20";
-  if (isRecording) return RECORDING_BG;
-  return iconIdleBg();
-}
-
-function applyIconWindowBg() {
-  if (!win || win.isDestroyed() || mode !== "icon") return;
-  win.setBackgroundColor(iconWindowBg());
-}
+/* Window is transparent; the renderer paints tile/bubble/panel surfaces itself. */
+function applyIconWindowBg() {}
 
 function setIconColor(id) {
   const theme = ICON_THEMES.find((item) => item.id === id) || ICON_THEMES[0];
@@ -108,6 +100,31 @@ function normalizeUserName(value) {
 
 function currentUserName() {
   return normalizeUserName(db?.getConfig()?.userName || "");
+}
+
+const PET_IDS = ["classic", "pip"];
+const PET_MOTIONS = ["system", "reduced"];
+
+function currentPetId() {
+  const id = db?.getConfig()?.petId;
+  return PET_IDS.includes(id) ? id : "classic";
+}
+
+function currentPetMotion() {
+  const id = db?.getConfig()?.petMotion;
+  return PET_MOTIONS.includes(id) ? id : "system";
+}
+
+function setPetId(id) {
+  const petId = PET_IDS.includes(id) ? id : "classic";
+  db?.setConfig({ petId });
+  return petId;
+}
+
+function setPetMotion(id) {
+  const petMotion = PET_MOTIONS.includes(id) ? id : "system";
+  db?.setConfig({ petMotion });
+  return petMotion;
 }
 
 function setUserName(value) {
@@ -256,7 +273,6 @@ function iconLayoutBounds() {
 function layoutIconWindow() {
   if (!win || win.isDestroyed() || mode !== "icon") return;
   applyIconChrome();
-  win.setBackgroundColor(iconWindowBg());
   win.setBounds(iconLayoutBounds(), false);
 }
 
@@ -372,6 +388,13 @@ function applyWindowMode(nextMode) {
   const bounds = win.getBounds();
   suppressPersist = true;
   stopModeAnimation();
+  // Icon mode keeps the title blank so Windows has no hover tooltip to show.
+  win.setTitle(mode === "panel" ? "Buddy" : "");
+  // Non-focusable while floating: Electron 35.5+ paints a phantom title bar
+  // on transparent windows when they gain/lose focus. Clicks still work.
+  if (mode === "panel") {
+    win.setFocusable(true);
+  }
 
   const finish = () => {
     persistPanelMemory();
@@ -401,15 +424,16 @@ function applyWindowMode(nextMode) {
     panelSize = { width: next.width, height: next.height };
     panelPos = { x: next.x, y: next.y };
     unlockForMorph();
-    win.setBackgroundColor("#141414");
     if (prev === "icon") {
       animateBounds(bounds, next, 260, () => {
         applyPanelChrome();
+        win?.focus();
         finish();
       });
     } else {
       win.setBounds(next, false);
       applyPanelChrome();
+      win.focus();
       finish();
     }
     return;
@@ -424,15 +448,16 @@ function applyWindowMode(nextMode) {
   const onScreen = iconLayoutBounds();
   iconPos = { x: onScreen.x, y: onScreen.y };
   unlockForMorph();
-  win.setBackgroundColor(iconWindowBg());
   if (prev === "panel") {
     animateBounds(bounds, onScreen, 200, () => {
       applyIconChrome();
+      win?.setFocusable(false);
       finish();
     });
   } else {
     applyIconChrome();
     win.setBounds(onScreen, false);
+    win.setFocusable(false);
     finish();
   }
 }
@@ -501,11 +526,14 @@ function createWindow() {
     x: startPos.x,
     y: startPos.y,
     frame: false,
-    transparent: false,
-    // thickFrame enables standard corner/edge resize on Windows frameless windows
-    thickFrame: true,
+    // Transparent so the pet floats free; panel/tile surfaces are CSS-painted.
+    // Native thickFrame resize does not work on transparent windows — the
+    // panel uses a custom resize grip instead.
+    transparent: true,
     autoHideMenuBar: true,
-    title: "Buddy",
+    // Blank while the pet floats — Windows shows the title as a hover tooltip
+    // on frameless windows. applyWindowMode restores "Buddy" for the panel.
+    title: mode === "panel" ? "Buddy" : "",
     alwaysOnTop: true,
     resizable: mode === "panel",
     maximizable: false,
@@ -514,8 +542,12 @@ function createWindow() {
     skipTaskbar: true,
     hasShadow: false,
     roundedCorners: true,
+    // Electron 35.5+ on Windows draws a phantom title bar on transparent
+    // frameless windows when focus changes. The icon never needs keyboard
+    // focus, so it stays non-focusable; panel mode re-enables focus.
+    focusable: mode === "panel",
     show: false,
-    backgroundColor: mode === "panel" ? "#141414" : iconIdleBg(),
+    backgroundColor: "#00000000",
     paintWhenInitiallyHidden: true,
     minWidth: mode === "panel" ? PANEL_MIN_W : ICON_SIZE,
     minHeight: mode === "panel" ? PANEL_MIN_H : ICON_SIZE,
@@ -530,6 +562,8 @@ function createWindow() {
   win.setMenuBarVisibility(false);
   win.removeMenu();
   win.setAlwaysOnTop(true, "screen-saver");
+  // Keep the page <title> from overwriting the mode-controlled window title
+  win.on("page-title-updated", (event) => event.preventDefault());
 
   win.webContents.session.setPermissionRequestHandler(
     (_wc, permission, callback) => {
@@ -598,6 +632,8 @@ function registerIpc() {
     mode,
     userDataPath: app.getPath("userData"),
     iconColor: iconThemeId(),
+    petId: currentPetId(),
+    petMotion: currentPetMotion(),
     userName: currentUserName(),
     openAtLogin: autostart.getAutoStart(app, db).openAtLogin,
     capabilities: {
@@ -611,6 +647,8 @@ function registerIpc() {
     autostart.setAutoStart(app, db, Boolean(enabled))
   );
   ipcMain.handle("app:setIconColor", (_e, id) => setIconColor(id));
+  ipcMain.handle("app:setPetId", (_e, id) => setPetId(id));
+  ipcMain.handle("app:setPetMotion", (_e, id) => setPetMotion(id));
   ipcMain.handle("app:setUserName", (_e, value) => setUserName(value));
   ipcMain.handle("app:setColorPicker", (_e, active) =>
     setColorPickerActive(Boolean(active))
@@ -818,6 +856,21 @@ function registerIpc() {
     persistBounds();
   });
 
+  // Custom panel resize — transparent windows get no native resize frame.
+  ipcMain.on("window:resize-panel", (_event, { width, height }) => {
+    if (!win || mode !== "panel") return;
+    const b = win.getBounds();
+    const display = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+    const w = Math.round(
+      Math.min(Math.max(width, PANEL_MIN_W), display.workArea.width)
+    );
+    const h = Math.round(
+      Math.min(Math.max(height, PANEL_MIN_H), display.workArea.height)
+    );
+    win.setBounds({ x: b.x, y: b.y, width: w, height: h }, false);
+    rememberPanelSize(w, h);
+  });
+
   ipcMain.handle("notes:list", () => db.listNotes());
   ipcMain.handle("notes:create", (_e, payload) => db.createNote(payload || {}));
   ipcMain.handle("notes:update", (_e, id, payload) =>
@@ -860,7 +913,19 @@ function registerIpc() {
       speakers.check(),
       qdrant.check(),
     ]);
-    return { whisper, ollama, speakers: speaker, qdrant: qdrantStatus };
+    return {
+      whisper,
+      ollama,
+      speakers: speaker,
+      qdrant: qdrantStatus,
+      diarization: diarize.check(),
+    };
+  });
+
+  ipcMain.handle("meeting:downloadDiarization", async () => {
+    return diarize.ensureDownloaded((message) => {
+      win?.webContents.send("meeting:progress", message);
+    });
   });
 
   ipcMain.handle("meeting:getSettings", () => meetingPipeline.getMeetSettings(db));
@@ -884,10 +949,18 @@ function registerIpc() {
 
   ipcMain.handle("voices:list", () => voiceService.listVoices());
   ipcMain.handle("voices:delete", (_e, id) => voiceService.deleteVoice(id));
+  ipcMain.handle("voices:clear", () => voiceService.clearVoices());
   ipcMain.handle("voices:resetSession", () => voiceService.resetSession());
   ipcMain.handle("voices:enroll", (_e, payload) => voiceService.enrollVoice(payload));
+  ipcMain.handle("voices:nameFromClip", (_e, payload) =>
+    voiceService.nameSpeakerFromClip(payload)
+  );
   ipcMain.handle("voices:identify", (_e, payload) =>
     voiceService.identifySpeaker(payload)
+  );
+  ipcMain.handle("voices:getSettings", () => voiceService.getSpeakerSettings());
+  ipcMain.handle("voices:setBackend", (_e, backend) =>
+    voiceService.setSpeakerBackend(backend)
   );
 }
 
@@ -945,9 +1018,18 @@ app.whenReady().then(() => {
   }
 
   speakers.init(path.join(app.getPath("userData"), "speaker-models"));
+  diarize.init(path.join(app.getPath("userData"), "diarization"));
   registerIpc();
   createWindow();
   void migrateVoicesToQdrant();
+  // Warm Whisper in the background so Stop & process skips cold model load.
+  setTimeout(() => {
+    try {
+      if (db) void meetingPipeline.warmConfiguredWhisper(db);
+    } catch (err) {
+      console.error("whisper warm failed", err);
+    }
+  }, 2500);
   setInterval(() => {
     if (!db || !win) return;
     const due = reminders.listPending(db).filter((r) => r.kind === "task");
@@ -976,6 +1058,8 @@ app.on("before-quit", () => {
   app.isQuitting = true;
   persistBounds();
   speakers.stop();
+  stopWhisper();
+  diarize.stop();
   try {
     const pidPath = path.join(app.getPath("userData"), "buddy.pid");
     if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);

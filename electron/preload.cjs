@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("buddy", {
   getState: () => ipcRenderer.invoke("app:getState"),
   setMode: (mode) => ipcRenderer.invoke("app:setMode", mode),
   setIconColor: (id) => ipcRenderer.invoke("app:setIconColor", id),
+  setPetId: (id) => ipcRenderer.invoke("app:setPetId", id),
+  setPetMotion: (id) => ipcRenderer.invoke("app:setPetMotion", id),
   setUserName: (value) => ipcRenderer.invoke("app:setUserName", value),
   getAutoStart: () => ipcRenderer.invoke("app:getAutoStart"),
   setAutoStart: (enabled) => ipcRenderer.invoke("app:setAutoStart", enabled),
@@ -11,6 +13,7 @@ contextBridge.exposeInMainWorld("buddy", {
   dragStart: (payload) => ipcRenderer.send("window:drag-start", payload),
   dragMove: (payload) => ipcRenderer.send("window:drag-move", payload),
   dragEnd: () => ipcRenderer.send("window:drag-end"),
+  resizePanel: (payload) => ipcRenderer.send("window:resize-panel", payload),
   showIconMenu: (payload) => ipcRenderer.send("icon:context-menu", payload),
 
   listNotes: () => ipcRenderer.invoke("notes:list"),
@@ -25,6 +28,7 @@ contextBridge.exposeInMainWorld("buddy", {
 
   getDesktopSource: () => ipcRenderer.invoke("meeting:desktopSource"),
   checkMeetingDeps: () => ipcRenderer.invoke("meeting:checkDeps"),
+  downloadDiarization: () => ipcRenderer.invoke("meeting:downloadDiarization"),
   getMeetSettings: () => ipcRenderer.invoke("meeting:getSettings"),
   setMeetSettings: (payload) => ipcRenderer.invoke("meeting:setSettings", payload),
   processMeeting: (payload) => ipcRenderer.invoke("meeting:process", payload),
@@ -34,8 +38,14 @@ contextBridge.exposeInMainWorld("buddy", {
   listVoices: () => ipcRenderer.invoke("voices:list"),
   enrollVoice: (payload) => ipcRenderer.invoke("voices:enroll", payload),
   deleteVoice: (id) => ipcRenderer.invoke("voices:delete", id),
+  clearVoices: () => ipcRenderer.invoke("voices:clear"),
   resetSpeakerSession: () => ipcRenderer.invoke("voices:resetSession"),
   identifySpeaker: (payload) => ipcRenderer.invoke("voices:identify", payload),
+  nameSpeakerFromClip: (payload) =>
+    ipcRenderer.invoke("voices:nameFromClip", payload),
+  getVoiceSettings: () => ipcRenderer.invoke("voices:getSettings"),
+  setSpeakerBackend: (backend) =>
+    ipcRenderer.invoke("voices:setBackend", backend),
 
   listPendingReminders: () => ipcRenderer.invoke("reminders:pending"),
   markReminderShown: (id) => ipcRenderer.invoke("reminders:markShown", id),

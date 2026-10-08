@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import NotesView from "./NotesView";
 import MeetView from "./MeetView";
 import { useMeetingRecorder, nowSpeakingLabel } from "./useMeetingRecorder";
@@ -9,7 +9,12 @@ import {
   type ReminderAction,
   type ReminderDef,
 } from "./reminderCatalog";
-import type { BuddyCapabilities, PendingReminderRef } from "./domain/types";
+import type {
+  BuddyCapabilities,
+  PendingReminderRef,
+  PetId,
+  PetMotion,
+} from "./domain/types";
 import { buddy, hasBuddyApi } from "./api/buddyClient";
 import SettingsDialog from "./SettingsDialog";
 import IconShell, { usePanelDragHandlers } from "./shell/IconShell";
@@ -55,7 +60,13 @@ function resolveReminder(pending: PendingReminderRef): ReminderDef | null {
 export default function App() {
   const [mode, setMode] = useState<Mode>("icon");
   const [iconColor, setIconColor] = useState("sand");
+  const [petId, setPetId] = useState<PetId>("classic");
+  const [petMotion, setPetMotion] = useState<PetMotion>("system");
+  const [noteReady, setNoteReady] = useState(false);
+  const [iconError, setIconError] = useState("");
   const [userName, setUserName] = useState("");
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   const [capabilities, setCapabilities] =
     useState<BuddyCapabilities>(DESKTOP_CAPABILITIES);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -73,6 +84,10 @@ export default function App() {
     void buddy.getState().then((s) => {
       setMode(s.mode === "panel" ? "panel" : "icon");
       if (s.iconColor) setIconColor(s.iconColor);
+      if (s.petId === "pip" || s.petId === "classic") setPetId(s.petId);
+      if (s.petMotion === "reduced" || s.petMotion === "system") {
+        setPetMotion(s.petMotion);
+      }
       if (typeof s.userName === "string") setUserName(s.userName);
       if (s.capabilities) setCapabilities(s.capabilities);
     });
@@ -98,6 +113,7 @@ export default function App() {
       }
       if (action === "stop") {
         void recorder.stopRecording().then((noteId) => {
+          if (noteId && modeRef.current === "icon") setNoteReady(true);
           if (noteId) void openPanel("meet");
         });
         return;
@@ -147,6 +163,12 @@ export default function App() {
   }, [mode, recording]);
 
   useEffect(() => {
+    if (recorder.error && modeRef.current === "icon") {
+      setIconError(recorder.error);
+    }
+  }, [recorder.error]);
+
+  useEffect(() => {
     if (!capabilities.meet && tab === "meet") setTab("notes");
   }, [capabilities.meet, tab]);
 
@@ -187,6 +209,8 @@ export default function App() {
   }
 
   async function openPanel(nextTab?: Tab) {
+    setNoteReady(false);
+    setIconError("");
     if (activeReminder) {
       setActiveReminder(null);
       await buddy.setReminderBubble(false);
@@ -224,6 +248,11 @@ export default function App() {
         }
         onReminderAction={(action) => void handleReminderAction(action)}
         onReminderClose={() => void dismissActiveReminder()}
+        petId={petId}
+        petMotion={petMotion}
+        error={iconError}
+        status={recorder.status}
+        noteReady={noteReady}
       />
     );
   }
@@ -257,6 +286,16 @@ export default function App() {
           onThemeChange={(id) => {
             setIconColor(id);
             void buddy.setIconColor(id);
+          }}
+          petId={petId}
+          petMotion={petMotion}
+          onPetIdChange={(id) => {
+            setPetId(id);
+            void buddy.setPetId(id);
+          }}
+          onPetMotionChange={(id) => {
+            setPetMotion(id);
+            void buddy.setPetMotion(id);
           }}
           onUserNameSave={async (value) => {
             const saved = await buddy.setUserName(value);

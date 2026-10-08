@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { BuddyMark, IconMinus, IconSettings } from "../icons";
+import { buddy } from "../api/buddyClient";
 import type { LiveSpeakerState, RecordPhase } from "../useMeetingRecorder";
 
 type Tab = "notes" | "meet";
@@ -114,7 +115,48 @@ export default function PanelShell({
 
         {children}
         {settings}
+        <PanelResizeGrip />
       </div>
+    </div>
+  );
+}
+
+/** Transparent windows get no native resize frame; this grip resizes via IPC. */
+function PanelResizeGrip() {
+  function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.screenX;
+    const startY = e.screenY;
+    const startW = window.innerWidth;
+    const startH = window.innerHeight;
+
+    const onMove = (ev: PointerEvent) => {
+      buddy.resizePanel({
+        width: startW + (ev.screenX - startX),
+        height: startH + (ev.screenY - startY),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
+  return (
+    <div
+      className="panel-resize-grip"
+      title="Resize"
+      onPointerDown={onPointerDown}
+    >
+      <svg viewBox="0 0 10 10" aria-hidden>
+        <path d="M9 1 1 9 M9 5 5 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+      </svg>
     </div>
   );
 }

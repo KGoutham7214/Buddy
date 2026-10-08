@@ -86,9 +86,17 @@ Replace `<your-username>` with the GitHub account that owns the repo.
 ## First-time setup
 
 1. Open the `buddy` folder in File Explorer
-2. Double-click **`Start Buddy.bat`**
-3. The first run may take a minute. It installs packages, then opens the app
+2. Double-click **`Setup Buddy.bat`** (one time only)
+3. It checks Node.js, installs packages, builds the app, offers the optional
+   meeting setup, and then opens Buddy
 4. Look for a **light-brown square** on your desktop (often near the bottom-right)
+5. That's it — from now on Buddy **starts itself when you sign in**
+   (Settings → Start at login to turn that off)
+
+Flags for the terminal version (`powershell -ExecutionPolicy Bypass -File scripts\setup-buddy.ps1`):
+`-NoMeet` skips the meeting-transcription questions, `-NoLaunch` sets up without opening Buddy.
+
+For later manual starts, use **`Start Buddy.bat`**.
 
 If Windows asks “Do you want to allow this app?”, choose **Yes** / **Run**.
 
@@ -123,7 +131,7 @@ A brown icon should appear. Click it to open Buddy.
 
 There is no Quit button on purpose. Buddy is meant to stay nearby. To hide it, click **−**.
 
-After the first successful launch, Buddy can register itself to **open when you sign in to Windows**. See [Start Buddy automatically at login](#start-buddy-automatically-at-login) for setup, checks, and how to turn it off.
+After the first successful launch, Buddy registers itself to **open when you sign in** (Windows and Mac). See [Start Buddy automatically at login](#start-buddy-automatically-at-login) for the short human checklist, verification, and how to turn it off.
 
 ---
 
@@ -131,7 +139,17 @@ After the first successful launch, Buddy can register itself to **open when you 
 
 Buddy can open the floating icon when you sign in — **without** a Terminal, PowerShell, or cmd window in the taskbar.
 
-In the app: **Settings → Start at login** (on by default after the first successful launch).
+### What you need to do (human side)
+
+Autostart is mostly automatic. You only need this once:
+
+1. **Install and run Buddy once** from a fixed project folder (`npm install`, then `npm run preview` on Windows or `npm run build` + `npm start` on Mac).
+2. Leave **Settings → Start at login** checked (it turns on after that first launch).
+3. **Do not** add `Start Buddy.bat`, `npm start`, or a shell script to Startup / Login Items — those open a console or Terminal.
+4. After you **move** the project folder, open Buddy once more so it rewrites the silent launcher paths.
+5. On Mac, if macOS asks to allow Buddy / Electron / background items at login, choose **Allow**.
+
+Nothing else is required day to day. Sign out/in or reboot; wait up to about two minutes on Windows for the backup task.
 
 ### Windows
 
@@ -184,7 +202,7 @@ Or create a Startup shortcut to that `wscript` command.
 
 ### Mac
 
-Buddy registers login startup automatically after the first successful launch (same **Settings → Start at login** toggle).
+Buddy registers login startup automatically after the first successful launch (same **Settings → Start at login** toggle). Follow the [human-side checklist](#what-you-need-to-do-human-side) above; you do not need to create a LaunchAgent by hand.
 
 What it sets up:
 
@@ -261,6 +279,37 @@ ollama pull llama3.2
 ```
 
 Leave Ollama running in the background.
+
+### Whisper speed tips (CPU)
+
+Buddy keeps faster-whisper **warm** after launch so Stop & process does not reload the model every time.
+
+In **Settings → Meeting models**:
+
+| Setting | Recommendation on this laptop |
+|---------|--------------------------------|
+| Whisper | **`distil-small.en`** (default) — faster than `small`, English-only |
+| Whisper beam | **`1`** (default) — use `2` if wording is rough |
+| Avoid | `medium` / `medium.en` unless you can wait |
+
+First run of a new model downloads weights once (HF cache).
+
+Optional **Nemotron diarization** (Settings → Meeting models) downloads a CPU runtime and names speaker turns after Whisper. It stays off until you download it. If it fails, Buddy falls back to clustering.
+
+### Voice ID (optional, CPU)
+
+Buddy identifies speakers with a local **ONNX** model (CampPlus by default, optional ERes2Net). No NVIDIA GPU required.
+
+1. Install voice deps once:
+
+```powershell
+pip install onnxruntime kaldi-native-fbank
+```
+
+2. Start **Qdrant** locally (`http://127.0.0.1:6333`)
+3. In Buddy → **Settings → Voice ID**: enroll each person on the **same headset mic** used in meetings
+4. Use **Test** to confirm score/floor; switch to ERes2Net only if you want a stronger encoder (clears old voices — re-enroll)
+5. After a meeting, use **Name this speaker…** on anonymous labels to save a correction for next time
 
 ### Record a meeting
 

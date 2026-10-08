@@ -3,6 +3,7 @@ import { IconClose } from "./icons";
 import VoiceIdSettings from "./VoiceIdSettings";
 import MeetModelsSettings from "./MeetModelsSettings";
 import { buddy } from "./api/buddyClient";
+import type { PetId, PetMotion } from "./domain/types";
 
 export const THEME_OPTIONS = [
   { id: "sand", label: "Sand", swatch: "#c4a574" },
@@ -19,6 +20,10 @@ type Props = {
   showVoiceId?: boolean;
   showMeetModels?: boolean;
   onThemeChange: (id: string) => void;
+  petId: PetId;
+  petMotion: PetMotion;
+  onPetIdChange: (id: PetId) => void;
+  onPetMotionChange: (id: PetMotion) => void;
   onUserNameSave: (value: string) => void | Promise<void>;
   onClose: () => void;
 };
@@ -31,6 +36,10 @@ export default function SettingsDialog({
   showVoiceId = true,
   showMeetModels = true,
   onThemeChange,
+  petId,
+  petMotion,
+  onPetIdChange,
+  onPetMotionChange,
   onUserNameSave,
   onClose,
 }: Props) {
@@ -139,6 +148,57 @@ export default function SettingsDialog({
                       className="theme-swatch-dot"
                       style={{ background: option.swatch }}
                     />
+                    <span className="theme-swatch-label">{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-label">Pet</div>
+            <div className="theme-swatches" role="radiogroup" aria-label="Pet">
+              {(
+                [
+                  { id: "classic", label: "Classic" },
+                  { id: "pip", label: "Pip" },
+                ] as const
+              ).map((option) => {
+                const selected = petId === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    className={`theme-swatch ${selected ? "selected" : ""}`}
+                    onClick={() => onPetIdChange(option.id)}
+                  >
+                    <span className="theme-swatch-label">{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="settings-label settings-label-follow">
+              Motion (Pet)
+            </div>
+            <div className="theme-swatches" role="radiogroup" aria-label="Pet motion">
+              {(
+                [
+                  { id: "system", label: "Follow system" },
+                  { id: "reduced", label: "Reduced" },
+                ] as const
+              ).map((option) => {
+                const selected = petMotion === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    className={`theme-swatch ${selected ? "selected" : ""}`}
+                    onClick={() => onPetMotionChange(option.id)}
+                  >
                     <span className="theme-swatch-label">{option.label}</span>
                   </button>
                 );

@@ -5,7 +5,9 @@ import {
 import MangaBubble from "../MangaBubble";
 import { BuddyMark } from "../icons";
 import { buddy } from "../api/buddyClient";
-import type { ReminderAction, ReminderDef } from "../domain/types";
+import type { PetId, PetMotion, ReminderAction, ReminderDef } from "../domain/types";
+import Pip from "../pet/Pip";
+import { petPose, usePrefersReducedMotion } from "../pet/usePetState";
 import type { LiveSpeakerState, RecordPhase } from "../useMeetingRecorder";
 
 type Props = {
@@ -23,6 +25,11 @@ type Props = {
   onOpen: () => void;
   onReminderAction: (action: ReminderAction) => void;
   onReminderClose: () => void;
+  petId: PetId;
+  petMotion: PetMotion;
+  error: string;
+  status: string;
+  noteReady: boolean;
 };
 
 export default function IconShell({
@@ -40,7 +47,22 @@ export default function IconShell({
   onOpen,
   onReminderAction,
   onReminderClose,
+  petId,
+  petMotion,
+  error,
+  status,
+  noteReady,
 }: Props) {
+  const pose = petPose({
+    phase,
+    error,
+    reminder: Boolean(activeReminder),
+    noteReady,
+  });
+  const reducedMotion = usePrefersReducedMotion(petMotion);
+  const petMode = petId === "pip";
+  const processingLabel =
+    phase === "processing" && status ? status : "Processing meeting…";
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -99,7 +121,7 @@ export default function IconShell({
     <div
       className={`collapsed-root color-${iconColor} ${recording ? "recording" : ""} ${
         activeReminder ? "with-bubble" : ""
-      }`}
+      } ${petMode ? "pet-mode" : ""}`}
     >
       {activeReminder ? (
         <MangaBubble
@@ -109,21 +131,29 @@ export default function IconShell({
         />
       ) : null}
       <button
-        className={`icon-orb color-${iconColor} ${recording ? "recording" : ""}`}
+        className={`icon-orb color-${iconColor} ${recording ? "recording" : ""} ${
+          petMode ? "pet-mode" : ""
+        }`}
         aria-label={
           phase === "recording"
             ? `Recording ${formatElapsed(elapsed)} — click to open`
             : "Open Buddy"
         }
+        /* No tooltip in pet mode — it pops over the bare desktop and reads as
+           stray floating text. The aria-label keeps it accessible. */
         title={
-          phase === "recording"
-            ? `Recording ${formatElapsed(elapsed)} — ${nowSpeakingLabel(
-                liveSpeakerState,
-                liveSpeaker
-              )}`
-            : phase === "processing"
-              ? "Processing meeting…"
-              : "Open Buddy"
+          petMode
+            ? undefined
+            : phase === "recording"
+              ? `Recording ${formatElapsed(elapsed)} — ${nowSpeakingLabel(
+                  liveSpeakerState,
+                  liveSpeaker
+                )}`
+              : phase === "processing"
+                ? processingLabel
+                : error
+                  ? error
+                  : "Open Buddy"
         }
         onPointerDown={onIconPointerDown}
         onContextMenu={(e) => {
@@ -136,8 +166,12 @@ export default function IconShell({
           });
         }}
       >
-        <BuddyMark className="icon-mark" />
-        {phase === "recording" && liveSpeakerTrail.length > 0 ? (
+        {petId === "pip" ? (
+          <Pip pose={pose} reducedMotion={reducedMotion} />
+        ) : (
+          <BuddyMark className="icon-mark" />
+        )}
+        {phase === "recording" && !petMode && liveSpeakerTrail.length > 0 ? (
           <span className="icon-speaker-strip" aria-hidden>
             {liveSpeakerTrail.map((name) => (
               <span
@@ -153,7 +187,19 @@ export default function IconShell({
           </span>
         ) : null}
         {phase === "recording" ? (
-          <span className="icon-rec-time">{formatElapsed(elapsed)}</span>
+          petMode ? (
+            <span className="pet-pill" aria-hidden>
+              <span className="pet-pill-dot" />
+              {formatElapsed(elapsed)}
+            </span>
+          ) : (
+            <span className="icon-rec-time">{formatElapsed(elapsed)}</span>
+          )
+        ) : null}
+        {phase === "processing" && status ? (
+          <span className={petMode ? "pet-pill" : "icon-status"}>
+            {petMode ? "…" : status}
+          </span>
         ) : null}
       </button>
     </div>

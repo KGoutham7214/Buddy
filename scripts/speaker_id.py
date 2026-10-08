@@ -2,9 +2,11 @@
 """JSON-line speaker embedding sidecar for Buddy.
 
 Commands on stdin (one JSON object per line):
-  {"id": 1, "cmd": "status"}
-  {"id": 2, "cmd": "embed", "pcm_b64": "...", "sample_rate": 16000, "enroll": false}
-  {"id": 3, "cmd": "embed_segments", "audio": "path", "segments": [...]}
+  {"id": 1, "cmd": "status", "model": "campplus"}
+  {"id": 2, "cmd": "set_model", "model": "eres2net"}
+  {"id": 3, "cmd": "embed", "pcm_b64": "...", "sample_rate": 16000, "enroll": false}
+  {"id": 4, "cmd": "embed_segments", "audio": "path", "segments": [...]}
+  {"id": 5, "cmd": "embed_meeting", "audio": "path"}
 """
 
 from __future__ import annotations
@@ -17,10 +19,96 @@ import sys
 import urllib.request
 from typing import Any
 
-MODEL_NAME = "campplus_voxceleb_16k.onnx"
-MODEL_URLS = [
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
-]
+MODEL_CATALOG = {
+    "campplus": {
+        "file": "campplus_voxceleb_16k.onnx",
+        "urls": [
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
+        ],
+    },
+    "eres2net": {
+        "file": "eres2net_voxceleb_16k.onnx",
+        "urls": [
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
+        ],
+    },
+}
+
+_preferred_model = "campplus"
+_encoder = None
+_backend: str | None = None
+_cache_dir = ""
+
+
+def detect_backend() -> str | None:
+    try:
+        import kaldi_native_fbank  # noqa: F401
+        import onnxruntime  # noqa: F401
+
+        return "onnx"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def normalize_model_id(value: str | None) -> str:
+    key = str(value or "campplus").strip().lower()
+    return key if key in MODEL_CATALOG else "campplus"
+
+
+def set_preferred_model(value: str | None) -> str:
+    global _preferred_model, _encoder, _backend
+    next_id = normalize_model_id(value)
+    if next_id != _preferred_model:
+        _encoder = None
+        _backend = None
+        _preferred_model = next_id
+    return _preferred_model
+
+
+def model_path(model_id: str | None = None) -> str:
+    mid = normalize_model_id(model_id or _preferred_model)
+    return os.path.join(_cache_dir or ".", MODEL_CATALOG[mid]["file"])
+
+
+def ensure_model(model_id: str | None = None) -> str:
+    mid = normalize_model_id(model_id or _preferred_model)
+    path = model_path(mid)
+    if os.path.isfile(path) and os.path.getsize(path) > 1_000_000:
+        return path
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    last_error = "download failed"
+    for url in MODEL_CATALOG[mid]["urls"]:
+        try:
+            urllib.request.urlretrieve(url, path)
+            if os.path.isfile(path) and os.path.getsize(path) > 1_000_000:
+                return path
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+    raise RuntimeError(f"Could not download speaker model ({mid}): {last_error}")
+
+
+def load_encoder() -> str:
+    global _encoder, _backend
+    if _encoder is not None and _backend:
+        return _backend
+
+    if not detect_backend():
+        raise RuntimeError(
+            "Voice ID needs onnxruntime + kaldi-native-fbank. Run: pip install onnxruntime kaldi-native-fbank"
+        )
+
+    import onnxruntime as ort
+
+    mid = normalize_model_id(_preferred_model)
+    path = ensure_model(mid)
+    _encoder = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+    _backend = mid
+    return _backend
+
+
+def ensure_campplus_model() -> str:
+    # Back-compat alias
+    return ensure_model("campplus")
 
 
 def _configure_stdio() -> None:
@@ -39,60 +127,6 @@ def _write(obj: dict[str, Any]) -> None:
     except Exception:  # noqa: BLE001
         sys.stdout.write(json.dumps(obj) + "\n")
         sys.stdout.flush()
-
-
-def detect_backend() -> str | None:
-    try:
-        import kaldi_native_fbank  # noqa: F401
-        import onnxruntime  # noqa: F401
-
-        return "campplus"
-    except Exception:  # noqa: BLE001
-        return None
-
-
-_encoder = None
-_backend: str | None = None
-_cache_dir = ""
-
-
-def model_path() -> str:
-    return os.path.join(_cache_dir or ".", MODEL_NAME)
-
-
-def ensure_campplus_model() -> str:
-    path = model_path()
-    if os.path.isfile(path) and os.path.getsize(path) > 1_000_000:
-        return path
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    last_error = "download failed"
-    for url in MODEL_URLS:
-        try:
-            urllib.request.urlretrieve(url, path)
-            if os.path.isfile(path) and os.path.getsize(path) > 1_000_000:
-                return path
-        except Exception as exc:  # noqa: BLE001
-            last_error = str(exc)
-    raise RuntimeError(f"Could not download speaker model: {last_error}")
-
-
-def load_encoder() -> str:
-    global _encoder, _backend
-    if _encoder is not None and _backend:
-        return _backend
-
-    backend = detect_backend()
-    if backend == "campplus":
-        import onnxruntime as ort
-
-        path = ensure_campplus_model()
-        _encoder = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
-        _backend = "campplus"
-        return _backend
-
-    raise RuntimeError(
-        "Voice ID needs CampPlus. Run: pip install onnxruntime kaldi-native-fbank"
-    )
 
 
 def _mel_filterbank(n_mels: int, freqs):
@@ -244,11 +278,7 @@ def _as_16k_float(pcm_b64: str, sample_rate: int):
 
 def embed_wav(wav) -> list[float]:
     wav = normalize_rms(wav)
-    backend = load_encoder()
-    if backend != "campplus":
-        raise RuntimeError(
-            "Voice ID needs CampPlus. Run: pip install onnxruntime kaldi-native-fbank"
-        )
+    load_encoder()
     feat = campplus_fbank(wav)[None, ...]
     inp = _encoder.get_inputs()[0].name
     out = _encoder.run(None, {inp: feat})[0]
@@ -372,6 +402,46 @@ def embed_live(wav) -> tuple[list[list[float]] | None, bool]:
     return [_l2(np.mean(np.stack(raw), axis=0))], True
 
 
+def _centroid_from_regions(wav, sr: int, regions) -> list[float] | None:
+    import numpy as np
+
+    clips = []
+    pieces = []
+    win_n = int(EMBED_WIN_S * sr)
+    hop_n = int(1.0 * sr)
+    min_region = int(1.5 * sr)
+    for reg in regions or []:
+        start = int(max(0.0, float(reg.get("start") or 0)) * sr)
+        end = int(max(0.0, float(reg.get("end") or 0)) * sr)
+        end = min(wav.shape[0], max(start, end))
+        if end - start < min_region:
+            if end > start:
+                pieces.append(wav[start:end])
+            continue
+        pos = start
+        while pos + int(0.8 * sr) <= end and len(clips) < 8:
+            clip_end = min(end, pos + win_n)
+            clip = wav[pos:clip_end]
+            if clip.shape[0] >= int(0.8 * sr) and rms(clip) >= speech_threshold(
+                noise_floor(clip, sr), rms(clip)
+            ):
+                clips.append(clip)
+            pos += max(1, hop_n)
+    if not clips and pieces:
+        merged = np.concatenate(pieces)
+        if merged.shape[0] >= min_region and rms(merged) >= SPEECH_ABS_RMS:
+            clips.append(merged[: win_n * 2])
+    if not clips:
+        return None
+    raw = [np.asarray(embed_wav(clip), dtype=np.float64) for clip in clips]
+    if len(raw) >= 3:
+        avg = np.mean(np.stack(raw), axis=0)
+        kept = [vec for vec in raw if _cosine(vec, avg) >= ENROLL_OUTLIER_COS]
+        if kept:
+            raw = kept
+    return _l2(np.mean(np.stack(raw), axis=0))
+
+
 def decode_audio_file(path: str):
     try:
         from faster_whisper.audio import decode_audio
@@ -405,23 +475,26 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
     req_id = msg.get("id")
 
     if cmd == "status":
-        backend = detect_backend()
-        if not backend:
+        if not detect_backend():
             return {
                 "id": req_id,
                 "ok": False,
                 "backend": None,
                 "ready": False,
-                "error": "Voice ID needs CampPlus. Run: pip install onnxruntime kaldi-native-fbank",
+                "models": list(MODEL_CATALOG.keys()),
+                "error": "Voice ID needs onnxruntime + kaldi-native-fbank. Run: pip install onnxruntime kaldi-native-fbank",
             }
+        if msg.get("model"):
+            set_preferred_model(str(msg.get("model")))
         try:
-            load_encoder()
+            backend = load_encoder()
         except Exception as exc:  # noqa: BLE001
             return {
                 "id": req_id,
                 "ok": False,
-                "backend": backend,
+                "backend": _preferred_model,
                 "ready": False,
+                "models": list(MODEL_CATALOG.keys()),
                 "error": str(exc),
             }
         return {
@@ -429,8 +502,22 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "backend": backend,
             "ready": True,
+            "models": list(MODEL_CATALOG.keys()),
             "error": None,
         }
+
+    if cmd == "set_model":
+        mid = set_preferred_model(str(msg.get("model") or ""))
+        try:
+            load_encoder()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "id": req_id,
+                "ok": False,
+                "backend": mid,
+                "error": str(exc),
+            }
+        return {"id": req_id, "ok": True, "backend": _backend, "model": mid}
 
     if cmd == "self_test":
         import numpy as np
@@ -462,6 +549,8 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         }
 
     if cmd == "embed":
+        if msg.get("model"):
+            set_preferred_model(str(msg.get("model")))
         wav = _as_16k_float(
             str(msg.get("pcm_b64") or ""), int(msg.get("sample_rate") or 16000)
         )
@@ -506,6 +595,8 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
         }
 
     if cmd == "embed_segments":
+        if msg.get("model"):
+            set_preferred_model(str(msg.get("model")))
         audio = str(msg.get("audio") or "")
         segments = msg.get("segments") or []
         wav = decode_audio_file(audio)
@@ -526,6 +617,78 @@ def handle(msg: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "backend": _backend,
             "embeddings": embeddings,
+        }
+
+    if cmd == "embed_meeting":
+        if msg.get("model"):
+            set_preferred_model(str(msg.get("model")))
+        audio = str(msg.get("audio") or "")
+        wav = decode_audio_file(audio)
+        sr = 16000
+        win_s = float(msg.get("win") or EMBED_WIN_S)
+        hop_s = float(msg.get("hop") or EMBED_HOP_S)
+        win_n = int(win_s * sr)
+        hop_n = max(1, int(hop_s * sr))
+        load_encoder()
+        windows: list[dict[str, Any]] = []
+        if wav.shape[0] < int(0.8 * sr):
+            return {
+                "id": req_id,
+                "ok": True,
+                "backend": _backend,
+                "windows": [],
+            }
+        starts = list(range(0, max(1, wav.shape[0] - win_n + 1), hop_n))
+        if not starts:
+            starts = [0]
+        for start in starts:
+            end = min(wav.shape[0], start + win_n)
+            clip = wav[start:end]
+            if clip.shape[0] < int(0.8 * sr):
+                continue
+            if rms(clip) < speech_threshold(noise_floor(clip, sr), rms(clip)):
+                continue
+            emb = embed_wav(clip)
+            windows.append(
+                {
+                    "start": start / float(sr),
+                    "end": end / float(sr),
+                    "embedding": emb,
+                }
+            )
+            if len(windows) >= 80:
+                break
+        return {
+            "id": req_id,
+            "ok": True,
+            "backend": _backend,
+            "windows": windows,
+        }
+
+    if cmd == "embed_regions":
+        if msg.get("model"):
+            set_preferred_model(str(msg.get("model")))
+        audio = str(msg.get("audio") or "")
+        wav = decode_audio_file(audio)
+        sr = 16000
+        load_encoder()
+        speakers_in = msg.get("speakers") or []
+        out_speakers = []
+        for spk in speakers_in:
+            sid = str(spk.get("id") or "")
+            regions = spk.get("regions") or []
+            centroid = _centroid_from_regions(wav, sr, regions)
+            out_speakers.append(
+                {
+                    "id": sid,
+                    "embedding": centroid,
+                }
+            )
+        return {
+            "id": req_id,
+            "ok": True,
+            "backend": _backend,
+            "speakers": out_speakers,
         }
 
     return {"id": req_id, "ok": False, "error": f"Unknown cmd: {cmd}"}

@@ -71,10 +71,29 @@ function TaskNodeView({
   const [amount, setAmount] = useState("30");
   const [unit, setUnit] = useState<Unit>("minutes");
   const popRef = useRef<HTMLDivElement | null>(null);
+  const titleRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     setTitle(task.title);
   }, [task.title]);
+
+  useEffect(() => {
+    const el = titleRef.current;
+    const parent = el?.parentElement;
+    if (!el || !parent) return;
+    let lastWidth = -1;
+    const fit = () => {
+      const width = el.clientWidth;
+      if (width === lastWidth) return;
+      lastWidth = width;
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [title]);
 
   useEffect(() => {
     if (!open) return;
@@ -117,13 +136,18 @@ function TaskNodeView({
           onChange={() => onToggle(task)}
           aria-label={task.done ? "Mark incomplete" : "Mark complete"}
         />
-        <input
+        <textarea
+          ref={titleRef}
           className="task-title"
+          rows={1}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={() => onRename(task, title)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              (e.target as HTMLTextAreaElement).blur();
+            }
           }}
         />
         <div className="task-actions" ref={popRef}>

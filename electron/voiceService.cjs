@@ -4,23 +4,35 @@ const { cosine } = require("./cosine.cjs");
 
 let db = null;
 
+const ONNX_BACKENDS = new Set(["campplus", "eres2net"]);
+
 function init(database) {
   db = database;
   applyTuning();
+  const model = speakerBackendFromDb();
+  speakers.setPreferredModel(model);
+}
+
+function speakerBackendFromDb() {
+  const raw = String(db?.getConfig?.().speakerBackend || "campplus")
+    .trim()
+    .toLowerCase();
+  return ONNX_BACKENDS.has(raw) ? raw : "campplus";
 }
 
 function applyTuning() {
   const tuning = db?.getConfig?.().voiceTuning || {};
   // Phase-3 floors (0.48+) rejected almost every live match — soften once.
-  if (
-    typeof tuning.campplusEnrolled === "number" &&
-    tuning.campplusEnrolled > 0.42
-  ) {
-    const next = {
-      ...tuning,
-      campplusEnrolled: 0.34,
-      updatedAt: new Date().toISOString(),
-    };
+  const next = { ...tuning };
+  let changed = false;
+  for (const key of ["campplusEnrolled", "eres2netEnrolled"]) {
+    if (typeof tuning[key] === "number" && tuning[key] > 0.42) {
+      next[key] = 0.34;
+      changed = true;
+    }
+  }
+  if (changed) {
+    next.updatedAt = new Date().toISOString();
     db.setConfig({ voiceTuning: next });
     speakers.setTuning(next);
     return;
@@ -32,7 +44,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Number(value)));
 }
 
-function recommendedCampplusFloor(embeddings) {
+function recommendedFloor(embeddings) {
   if (!Array.isArray(embeddings) || embeddings.length < 2) return null;
   const centroid = embeddings[embeddings.length - 1];
   const samples = embeddings.slice(0, -1);
@@ -91,13 +103,75 @@ async function deleteVoice(id) {
     const listed = await qdrant.listVoices();
     if (listed.ok && (listed.voices || []).length === 0) {
       const current = db?.getConfig?.().voiceTuning || {};
-      if (typeof current.campplusEnrolled === "number") {
-        db.setConfig({ voiceTuning: { ...current, campplusEnrolled: null } });
+      const next = { ...current };
+      let changed = false;
+      for (const key of ["campplusEnrolled", "eres2netEnrolled"]) {
+        if (typeof current[key] === "number") {
+          next[key] = null;
+          changed = true;
+        }
+      }
+      if (changed) {
+        db.setConfig({ voiceTuning: next });
         applyTuning();
       }
     }
   }
   return Boolean(deleted.ok && deleted.deleted);
+}
+
+async function clearVoices() {
+  const cleared = await qdrant.clearAllVoices();
+  if (!cleared.ok) return cleared;
+  try {
+    db?.clearVoices?.();
+  } catch {
+    // ignore legacy json voices
+  }
+  const current = db?.getConfig?.().voiceTuning || {};
+  db?.setConfig?.({
+    voiceTuning: {
+      ...current,
+      campplusEnrolled: null,
+      eres2netEnrolled: null,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+  applyTuning();
+  speakers.resetSession();
+  return { ok: true, deleted: cleared.deleted || 0 };
+}
+
+async function getSpeakerSettings() {
+  const backend = speakerBackendFromDb();
+  speakers.setPreferredModel(backend);
+  const checked = await speakers.check();
+  return {
+    ok: true,
+    speakerBackend: backend,
+    backends: ["campplus", "eres2net"],
+    speakers: checked,
+  };
+}
+
+async function setSpeakerBackend(value) {
+  const next = ONNX_BACKENDS.has(String(value || "").trim().toLowerCase())
+    ? String(value).trim().toLowerCase()
+    : "campplus";
+  const prev = speakerBackendFromDb();
+  db.setConfig({ speakerBackend: next });
+  speakers.setPreferredModel(next);
+  const loaded = await speakers.setModel(next);
+  if (!loaded.ok) return loaded;
+  if (prev !== next) {
+    await clearVoices();
+  }
+  return {
+    ok: true,
+    speakerBackend: next,
+    cleared: prev !== next,
+    backend: loaded.backend,
+  };
 }
 
 async function enrollVoice(payload) {
@@ -110,6 +184,8 @@ async function enrollVoice(payload) {
       error: reachable.error || "Start Qdrant locally (http://127.0.0.1:6333)",
     };
   }
+
+  speakers.setPreferredModel(speakerBackendFromDb());
 
   const passBuffers = [];
   if (Array.isArray(payload?.passes) && payload.passes.length > 0) {
@@ -126,16 +202,18 @@ async function enrollVoice(payload) {
   }
 
   const sampleRate = payload?.sampleRate || 16000;
+  const deviceLabel = String(payload?.deviceLabel || "").trim();
+  const channel = String(payload?.channel || "mic").trim() || "mic";
   const collected = [];
   let backend = "";
   for (const pcm of passBuffers) {
     const embedded = await speakers.embedPcm(pcm, sampleRate, true);
     if (!embedded.ok) return embedded;
-    if (embedded.backend && embedded.backend !== "campplus") {
+    if (embedded.backend && !ONNX_BACKENDS.has(embedded.backend)) {
       return {
         ok: false,
         error:
-          "Voice ID needs CampPlus. Run: pip install onnxruntime kaldi-native-fbank",
+          "Voice ID needs CampPlus or ERes2Net. Run: pip install onnxruntime kaldi-native-fbank",
       };
     }
     backend = embedded.backend || backend;
@@ -153,7 +231,7 @@ async function enrollVoice(payload) {
     };
   }
 
-  // Rebuild centroid as last vector for recommendedCampplusFloor / upsert convention
+  // Rebuild centroid as last vector for floor / upsert convention
   const dim = collected[0].length;
   const centroid = new Array(dim).fill(0);
   for (const vec of collected) {
@@ -168,16 +246,20 @@ async function enrollVoice(payload) {
     name,
     embeddings,
     backend,
+    deviceLabel,
+    channel,
   });
   if (!saved.ok) return saved;
-  if (backend === "campplus") {
-    const floor = recommendedCampplusFloor(embeddings);
+  if (ONNX_BACKENDS.has(backend)) {
+    const floor = recommendedFloor(embeddings);
     if (typeof floor === "number") {
       const current = db.getConfig().voiceTuning || {};
+      const floorKey =
+        backend === "eres2net" ? "eres2netEnrolled" : "campplusEnrolled";
       db.setConfig({
         voiceTuning: {
           ...current,
-          campplusEnrolled: floor,
+          [floorKey]: floor,
           updatedAt: new Date().toISOString(),
         },
       });
@@ -187,11 +269,52 @@ async function enrollVoice(payload) {
   return saved;
 }
 
+async function nameSpeakerFromClip(payload) {
+  const name = String(payload?.name || "").trim();
+  const fromLabel = String(payload?.fromLabel || "").trim();
+  if (!name) return { ok: false, error: "Name is required" };
+  const enrolled = await enrollVoice({
+    name,
+    pcm: payload?.pcm,
+    passes: payload?.passes,
+    sampleRate: payload?.sampleRate || 16000,
+    deviceLabel: payload?.deviceLabel || "",
+    channel: payload?.channel || "mic",
+  });
+  if (!enrolled.ok) return enrolled;
+
+  let note = null;
+  const noteId = payload?.noteId;
+  if (noteId && fromLabel) {
+    const existing = db.getNote(noteId);
+    if (existing && existing.kind === "meeting") {
+      const esc = fromLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`\\[${esc}\\]`, "g");
+      const nextBody = String(existing.body || "").replace(re, `[${name}]`);
+      const nextTranscript = String(existing.transcript || "").replace(
+        re,
+        `[${name}]`
+      );
+      note = db.updateNote(noteId, {
+        body: nextBody,
+        transcript: nextTranscript,
+      });
+    }
+  }
+  return { ok: true, voice: enrolled.voice, note };
+}
+
 async function identifySpeaker(payload) {
   const pcm = toPcmBuffer(payload?.pcm);
   if (!pcm) return { ok: false, error: "No audio" };
   applyTuning();
-  return speakers.identifyPcm(pcm, payload?.sampleRate || 16000, false);
+  speakers.setPreferredModel(speakerBackendFromDb());
+  return speakers.identifyPcm(
+    pcm,
+    payload?.sampleRate || 16000,
+    false,
+    payload?.channel || "mic"
+  );
 }
 
 module.exports = {
@@ -199,7 +322,11 @@ module.exports = {
   applyTuning,
   listVoices,
   deleteVoice,
+  clearVoices,
   enrollVoice,
+  nameSpeakerFromClip,
   identifySpeaker,
+  getSpeakerSettings,
+  setSpeakerBackend,
   resetSession: () => speakers.resetSession(),
 };

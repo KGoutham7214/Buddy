@@ -45,12 +45,16 @@ async function qdrantFetch(pathname, { method = "GET", body, timeoutMs = 12000 }
   }
 }
 
+const ALLOWED_BACKENDS = new Set(["campplus", "eres2net"]);
+
 function publicVoice(point) {
   const payload = point.payload || {};
   return {
     id: String(point.id),
     name: payload.name || "Voice",
     backend: payload.backend || "",
+    deviceLabel: payload.deviceLabel || "",
+    channel: payload.channel || "",
     createdAt: payload.createdAt || "",
     updatedAt: payload.updatedAt || "",
   };
@@ -92,7 +96,7 @@ async function createCollection(size) {
 }
 
 async function ensureIndexes() {
-  for (const field of ["nameKey", "backend"]) {
+  for (const field of ["nameKey", "backend", "channel", "deviceLabel"]) {
     await qdrantFetch(`/collections/${COLLECTION}/index`, {
       method: "PUT",
       body: { field_name: field, field_schema: "keyword" },
@@ -109,9 +113,18 @@ async function ensureCollection(size) {
     return { ok: true, size };
   }
   if (info.size && info.size !== size) {
+    if ((info.points || 0) === 0) {
+      const removed = await qdrantFetch(`/collections/${COLLECTION}`, {
+        method: "DELETE",
+      });
+      if (!removed.ok) return removed;
+      const created = await createCollection(size);
+      if (!created.ok) return created;
+      return { ok: true, size };
+    }
     return {
       ok: false,
-      error: `Qdrant collection expects ${info.size}-d vectors, got ${size}. Re-enroll with the active backend or recreate buddy_voices manually.`,
+      error: `Qdrant collection expects ${info.size}-d vectors, got ${size}. Clear voices & re-enroll after switching encoder.`,
     };
   }
   await ensureIndexes();
@@ -180,17 +193,26 @@ async function retrievePoint(id) {
   return { ok: true, point: points[0] || null };
 }
 
-async function upsertVoices({ name, embeddings, backend, createdAt }) {
+async function upsertVoices({
+  name,
+  embeddings,
+  backend,
+  createdAt,
+  deviceLabel,
+  channel,
+}) {
   const vectors = (Array.isArray(embeddings) ? embeddings : []).filter(
     (vec) => Array.isArray(vec) && vec.length > 0
   );
   if (vectors.length === 0) {
     return { ok: false, error: "Empty embedding" };
   }
-  if (backend && backend !== "campplus") {
+  const backendId = String(backend || "").trim().toLowerCase();
+  if (backendId && !ALLOWED_BACKENDS.has(backendId)) {
     return {
       ok: false,
-      error: "Voice ID needs CampPlus. Re-enroll after installing onnxruntime and kaldi-native-fbank.",
+      error:
+        "Voice ID needs CampPlus or ERes2Net. Run: pip install onnxruntime kaldi-native-fbank",
     };
   }
   const ensured = await ensureCollection(vectors[0].length);
@@ -206,13 +228,17 @@ async function upsertVoices({ name, embeddings, backend, createdAt }) {
   const removed = await deleteByNameKey(nameKey);
   if (!removed.ok) return removed;
 
+  const device = String(deviceLabel || "").trim();
+  const ch = String(channel || "").trim() || "mic";
   const points = vectors.map((vector, index) => ({
     id: randomUUID(),
     vector,
     payload: {
       name: trimmed,
       nameKey,
-      backend: backend || "",
+      backend: backendId || "",
+      deviceLabel: device,
+      channel: ch,
       createdAt: created,
       updatedAt: now,
       kind: index === vectors.length - 1 ? "centroid" : "enroll_clip",
@@ -229,21 +255,44 @@ async function upsertVoices({ name, embeddings, backend, createdAt }) {
     voice: {
       id: String(points[0].id),
       name: trimmed,
-      backend: backend || "",
+      backend: backendId || "",
+      deviceLabel: device,
+      channel: ch,
       createdAt: created,
       updatedAt: now,
     },
   };
 }
 
-async function upsertVoice({ id, name, embedding, backend, createdAt }) {
+async function upsertVoice({
+  id,
+  name,
+  embedding,
+  backend,
+  createdAt,
+  deviceLabel,
+  channel,
+}) {
   return upsertVoices({
     name,
     embeddings: [embedding],
     backend,
     createdAt: createdAt || undefined,
+    deviceLabel,
+    channel,
     id,
   });
+}
+
+async function clearAllVoices() {
+  const info = await collectionInfo();
+  if (!info.ok) return info;
+  if (!info.exists) return { ok: true, deleted: 0 };
+  const removed = await qdrantFetch(`/collections/${COLLECTION}`, {
+    method: "DELETE",
+  });
+  if (!removed.ok) return removed;
+  return { ok: true, deleted: info.points || 0 };
 }
 
 async function listVoices() {
@@ -275,6 +324,8 @@ async function listVoices() {
     if (voice.updatedAt && (!prev.updatedAt || voice.updatedAt > prev.updatedAt)) {
       prev.updatedAt = voice.updatedAt;
       prev.backend = voice.backend || prev.backend;
+      prev.deviceLabel = voice.deviceLabel || prev.deviceLabel;
+      prev.channel = voice.channel || prev.channel;
     }
   }
   const voices = [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -340,7 +391,7 @@ async function search(embedding, { backend, limit = 8 } = {}) {
   return { ok: true, hits };
 }
 
-async function scoreByCosine(embedding, { backend, limit = 16 } = {}) {
+async function scoreByCosine(embedding, { backend, channel, limit = 16 } = {}) {
   if (!Array.isArray(embedding) || embedding.length === 0) {
     return { ok: false, error: "Empty embedding" };
   }
@@ -357,13 +408,21 @@ async function scoreByCosine(embedding, { backend, limit = 16 } = {}) {
     },
   });
   if (!res.ok) return res;
+  const wantChannel = String(channel || "").trim().toLowerCase();
   const hits = [];
   for (const point of res.json?.result?.points || []) {
     const payload = point.payload || {};
     if (backend && payload.backend && payload.backend !== backend) continue;
     const vector = asVector(point.vector);
-    const score = cosine(embedding, vector);
+    let score = cosine(embedding, vector);
     if (score < 0) continue;
+    if (
+      wantChannel &&
+      payload.channel &&
+      String(payload.channel).toLowerCase() === wantChannel
+    ) {
+      score = Math.min(1, score + 0.02);
+    }
     hits.push({
       id: String(point.id),
       score,
@@ -406,6 +465,7 @@ module.exports = {
   upsertVoice,
   upsertVoices,
   deleteVoice,
+  clearAllVoices,
   search,
   scoreByCosine,
   migrateVoices,

@@ -4,17 +4,44 @@ const { randomUUID } = require("crypto");
 const {
   transcribeAudio,
   normalizeWhisperModel,
+  normalizeBeamSize,
+  WHISPER_MODEL_LIST,
+  DEFAULT_MODEL,
+  DEFAULT_BEAM,
+  warmWhisper,
 } = require("./transcribe.cjs");
 const { summarizeMeeting } = require("./ollama.cjs");
 const speakers = require("./speakers.cjs");
 const qdrant = require("./qdrant.cjs");
+const diarize = require("./diarize.cjs");
 
 function meetSettingsFromDb(db) {
   const config = db?.getConfig?.() || {};
-  const whisperModel = normalizeWhisperModel(config.whisperModel || "small");
+  const whisperModel = normalizeWhisperModel(
+    config.whisperModel || DEFAULT_MODEL
+  );
+  const whisperBeamSize = normalizeBeamSize(
+    config.whisperBeamSize ?? DEFAULT_BEAM
+  );
   const ollamaModel =
     typeof config.ollamaModel === "string" ? config.ollamaModel.trim() : "";
-  return { whisperModel, ollamaModel };
+  const rawBackend = String(config.speakerBackend || "campplus")
+    .trim()
+    .toLowerCase();
+  const speakerBackend =
+    rawBackend === "eres2net" ? "eres2net" : "campplus";
+  const diarizationBackend =
+    String(config.diarizationBackend || "off").trim().toLowerCase() ===
+    "nemotron"
+      ? "nemotron"
+      : "off";
+  return {
+    whisperModel,
+    whisperBeamSize,
+    ollamaModel,
+    speakerBackend,
+    diarizationBackend,
+  };
 }
 
 async function buildInitialPrompt(db) {
@@ -68,14 +95,19 @@ async function processMeeting(payload, { db, onProgress } = {}) {
     return { ok: false, error: err.message || "Failed to save audio" };
   }
 
-  const { whisperModel, ollamaModel } = meetSettingsFromDb(db);
+  const { whisperModel, whisperBeamSize, ollamaModel, speakerBackend } =
+    meetSettingsFromDb(db);
+  speakers.setPreferredModel(speakerBackend);
   const initialPrompt = await buildInitialPrompt(db);
 
-  onProgress?.(`Transcribing with Whisper (${whisperModel})…`);
+  onProgress?.(
+    `Transcribing with Whisper (${whisperModel}, beam ${whisperBeamSize})…`
+  );
   const stt = await transcribeAudio(fullPath, {
     model: whisperModel,
     language: "en",
     initialPrompt,
+    beamSize: whisperBeamSize,
   });
   if (!stt.ok) {
     return {
@@ -87,22 +119,54 @@ async function processMeeting(payload, { db, onProgress } = {}) {
 
   let transcript = String(stt.text || "").trim();
   let labelWarning = "";
+  const { diarizationBackend } = meetSettingsFromDb(db);
   if ((stt.segments || []).length > 0) {
-    onProgress?.("Identifying speakers…");
-    try {
-      const labeled = await speakers.labelSegments(
-        fullPath,
-        stt.segments,
-        speakerTurns || []
-      );
-      if (labeled.ok && labeled.transcript) {
-        transcript = labeled.transcript;
-      } else if (!labeled.ok) {
-        labelWarning = labeled.error || "Speaker labeling failed";
+    let labeled = null;
+    if (diarizationBackend === "nemotron") {
+      const ready = diarize.check();
+      if (!ready.ok) {
+        labelWarning = ready.error || "Nemotron diarization is not downloaded.";
+      } else {
+        onProgress?.("Diarizing speakers…");
+        try {
+          const diar = await diarize.diarizeFile(fullPath);
+          if (diar.ok && (diar.turns || []).length > 0) {
+            onProgress?.("Naming speakers…");
+            labeled = await speakers.labelFromDiarization(
+              fullPath,
+              stt.segments,
+              diar.turns
+            );
+          } else {
+            labelWarning = diar.error || "Diarization returned no turns";
+          }
+        } catch (err) {
+          labelWarning = (err && err.message) || "Diarization failed";
+        }
+      }
+    }
+    if (!labeled?.ok) {
+      if (labelWarning) onProgress?.(labelWarning);
+      onProgress?.("Clustering speakers…");
+      try {
+        labeled = await speakers.labelSegments(
+          fullPath,
+          stt.segments,
+          speakerTurns || [],
+          onProgress
+        );
+      } catch (err) {
+        labelWarning = (err && err.message) || "Speaker labeling failed";
         onProgress?.(labelWarning);
       }
-    } catch (err) {
-      labelWarning = (err && err.message) || "Speaker labeling failed";
+    }
+    if (labeled?.ok && labeled.transcript) {
+      transcript = labeled.transcript;
+      if (diarizationBackend === "nemotron" && labeled.speakers) {
+        labelWarning = "";
+      }
+    } else if (labeled && !labeled.ok) {
+      labelWarning = labeled.error || labelWarning || "Speaker labeling failed";
       onProgress?.(labelWarning);
     }
   }
@@ -187,8 +251,14 @@ function getMeetSettings(db) {
   return {
     ok: true,
     whisperModel: settings.whisperModel,
+    whisperBeamSize: settings.whisperBeamSize,
     ollamaModel: settings.ollamaModel,
-    whisperModels: ["base", "small", "medium"],
+    speakerBackend: settings.speakerBackend,
+    diarizationBackend: settings.diarizationBackend,
+    whisperModels: WHISPER_MODEL_LIST.slice(),
+    whisperBeamSizes: [1, 2, 5],
+    speakerBackends: ["campplus", "eres2net"],
+    diarizationBackends: ["off", "nemotron"],
   };
 }
 
@@ -197,16 +267,48 @@ function setMeetSettings(db, partial = {}) {
   if (partial.whisperModel != null) {
     patch.whisperModel = normalizeWhisperModel(partial.whisperModel);
   }
+  if (partial.whisperBeamSize != null) {
+    patch.whisperBeamSize = normalizeBeamSize(partial.whisperBeamSize);
+  }
   if (partial.ollamaModel != null) {
     const value = String(partial.ollamaModel || "").trim();
     patch.ollamaModel = value;
   }
+  if (partial.speakerBackend != null) {
+    const raw = String(partial.speakerBackend || "campplus")
+      .trim()
+      .toLowerCase();
+    patch.speakerBackend = raw === "eres2net" ? "eres2net" : "campplus";
+  }
+  if (partial.diarizationBackend != null) {
+    const raw = String(partial.diarizationBackend || "off")
+      .trim()
+      .toLowerCase();
+    patch.diarizationBackend = raw === "nemotron" ? "nemotron" : "off";
+  }
   const next = db.setConfig(patch);
+  if (partial.whisperModel != null) {
+    // Warm the new model in the background so the next meet is faster.
+    void warmWhisper(patch.whisperModel);
+  }
   return {
     ok: true,
-    whisperModel: normalizeWhisperModel(next.whisperModel || "small"),
+    whisperModel: normalizeWhisperModel(next.whisperModel || DEFAULT_MODEL),
+    whisperBeamSize: normalizeBeamSize(
+      next.whisperBeamSize ?? DEFAULT_BEAM
+    ),
     ollamaModel:
       typeof next.ollamaModel === "string" ? next.ollamaModel.trim() : "",
+    speakerBackend:
+      String(next.speakerBackend || "campplus").trim().toLowerCase() ===
+      "eres2net"
+        ? "eres2net"
+        : "campplus",
+    diarizationBackend:
+      String(next.diarizationBackend || "off").trim().toLowerCase() ===
+      "nemotron"
+        ? "nemotron"
+        : "off",
   };
 }
 
@@ -215,4 +317,8 @@ module.exports = {
   summarizeNote,
   getMeetSettings,
   setMeetSettings,
+  warmConfiguredWhisper(db) {
+    const { whisperModel } = meetSettingsFromDb(db);
+    return warmWhisper(whisperModel);
+  },
 };

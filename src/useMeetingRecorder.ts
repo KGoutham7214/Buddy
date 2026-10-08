@@ -164,11 +164,7 @@ export function useMeetingRecorder(): MeetingRecorder {
     }
   }
 
-  function attachLiveIdentify(
-    context: AudioContext,
-    mic: MediaStream,
-    system: MediaStream | null
-  ) {
+  function attachLiveIdentify(context: AudioContext) {
     const hold = {
       mic: { label: "", score: 0, at: 0 },
       system: { label: "", score: 0, at: 0 },
@@ -278,6 +274,7 @@ export function useMeetingRecorder(): MeetingRecorder {
           const result = await buddy.identifySpeaker({
             pcm: sample.pcm,
             sampleRate: 16000,
+            channel: sample.channel,
           });
           if (result.ok && result.kind === "enrolled" && result.label) {
             applyResult(result, true, sample.channel);
@@ -328,8 +325,7 @@ export function useMeetingRecorder(): MeetingRecorder {
       tapsRef.current.push(tap);
     }
 
-    void tapStream(mic, "mic");
-    if (system) void tapStream(system, "system");
+    return { tapStream };
   }
 
   async function startRecording() {
@@ -343,7 +339,6 @@ export function useMeetingRecorder(): MeetingRecorder {
       await buddy.resetSpeakerSession();
       const pickedMic = await openPreferredMicStream();
       const micStream = pickedMic.stream;
-      const systemStream = await getSystemAudioStream();
 
       const context = new AudioContext();
       await context.resume();
@@ -351,31 +346,45 @@ export function useMeetingRecorder(): MeetingRecorder {
       context.createMediaStreamSource(micStream).connect(destination);
 
       const streams = [micStream];
-      if (systemStream) {
-        context.createMediaStreamSource(systemStream).connect(destination);
-        streams.push(systemStream);
-        setCaptureInfo(`Mic + system audio (${pickedMic.label})`);
-      } else {
-        setCaptureInfo(`Mic only (${pickedMic.label})`);
-      }
-
       startedAtRef.current = Date.now();
       liveTurnsRef.current = [];
       identifyQueue.current = [];
-      attachLiveIdentify(context, micStream, systemStream);
+      const identify = attachLiveIdentify(context);
+      void identify.tapStream(micStream, "mic");
 
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : "audio/webm";
-      const recorder = new MediaRecorder(destination.stream, { mimeType });
+      const recorder = new MediaRecorder(destination.stream, {
+        mimeType,
+        audioBitsPerSecond: 128000,
+      });
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
 
       mediaRef.current = { recorder, streams, context, chunks };
-      recorder.start(1000);
+      // Start on mic immediately. The screen-share picker used to run first,
+      // so everything said while that dialog was open never hit the file.
+      recorder.start();
       setPhase("recording");
+      setCaptureInfo(`Mic only (${pickedMic.label}) — pick a window for system audio`);
+
+      const systemStream = await getSystemAudioStream();
+      const stillThis = mediaRef.current.recorder === recorder;
+      if (!stillThis || recorder.state === "inactive") {
+        systemStream?.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      if (systemStream) {
+        context.createMediaStreamSource(systemStream).connect(destination);
+        streams.push(systemStream);
+        void identify.tapStream(systemStream, "system");
+        setCaptureInfo(`Mic + system audio (${pickedMic.label})`);
+      } else {
+        setCaptureInfo(`Mic only (${pickedMic.label})`);
+      }
     } catch (err) {
       cleanupStreams();
       setError(

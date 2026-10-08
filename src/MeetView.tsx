@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Note, Task } from "./domain/types";
 import { buddy } from "./api/buddyClient";
 import { nowSpeakingLabel, type MeetingRecorder } from "./useMeetingRecorder";
+import { captureMicPcm } from "./voiceCapture";
 import TaskList from "./TaskList";
 import { IconTrash } from "./icons";
 import { useConfirm } from "./ConfirmDialog";
@@ -11,6 +12,7 @@ type Deps = {
   ollama: { ok: boolean; error?: string; models?: string[] };
   speakers?: { ok: boolean; error?: string; backend?: string };
   qdrant?: { ok: boolean; error?: string };
+  diarization?: { ok: boolean; ready?: boolean; error?: string };
 };
 
 function formatDate(iso: string) {
@@ -32,6 +34,16 @@ function formatElapsed(seconds: number) {
     .padStart(2, "0");
   const s = (seconds % 60).toString().padStart(2, "0");
   return `${m}:${s}`;
+}
+
+function anonymousSpeakers(transcript: string): string[] {
+  const found = new Set<string>();
+  const re = /\[(Speaker\s+\d+)\]/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(transcript))) {
+    found.add(match[1]);
+  }
+  return [...found].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 type Props = {
@@ -58,6 +70,11 @@ export default function MeetView({ recorder }: Props) {
   const [deps, setDeps] = useState<Deps | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [nameTarget, setNameTarget] = useState("");
+  const [nameValue, setNameValue] = useState("");
+  const [naming, setNaming] = useState(false);
+  const [nameLeft, setNameLeft] = useState(4);
+  const [nameHint, setNameHint] = useState("");
   const { confirm, dialog } = useConfirm();
 
   const selected = useMemo(
@@ -69,6 +86,11 @@ export default function MeetView({ recorder }: Props) {
     if (!selectedId) return [];
     return tasks.filter((t) => t.noteId === selectedId);
   }, [tasks, selectedId]);
+
+  const unknownLabels = useMemo(
+    () => anonymousSpeakers(selected?.transcript || selected?.body || ""),
+    [selected]
+  );
 
   async function refresh(preferId?: string | null) {
     const list = (await buddy.listNotes()).filter(
@@ -90,7 +112,47 @@ export default function MeetView({ recorder }: Props) {
 
   useEffect(() => {
     setShowTranscript(false);
+    setNameTarget("");
+    setNameValue("");
+    setNameHint("");
   }, [selectedId]);
+
+  async function nameSpeaker() {
+    if (!selected || !nameTarget || !nameValue.trim() || naming) return;
+    setNaming(true);
+    setNameHint("");
+    try {
+      const captured = await captureMicPcm(4, setNameLeft);
+      if (!captured.voiced) {
+        setNameHint(
+          `Didn't hear speech on ${captured.deviceLabel}. Have that person speak into the headset mic.`
+        );
+        return;
+      }
+      const result = await buddy.nameSpeakerFromClip({
+        name: nameValue.trim(),
+        fromLabel: nameTarget,
+        noteId: selected.id,
+        pcm: captured.pcm,
+        sampleRate: 16000,
+        deviceLabel: captured.deviceLabel,
+        channel: "mic",
+      });
+      if (!result.ok) {
+        setNameHint(result.error || "Could not save this speaker");
+        return;
+      }
+      setNameHint(`Saved ${nameValue.trim()} — next meetings will use this print.`);
+      setNameTarget("");
+      setNameValue("");
+      await refresh(selected.id);
+    } catch (err) {
+      setNameHint(err instanceof Error ? err.message : "Microphone unavailable");
+    } finally {
+      setNaming(false);
+      setNameLeft(4);
+    }
+  }
 
   async function handleStop() {
     const noteId = await stopRecording();
@@ -221,6 +283,12 @@ export default function MeetView({ recorder }: Props) {
           </span>
           <span className={deps.speakers?.ok ? "dep ok" : "dep bad"}>
             Voice ID {deps.speakers?.ok ? "ready" : "missing"}
+          </span>
+          <span className={deps.diarization?.ok ? "dep ok" : "dep bad"}>
+            Diarization {deps.diarization?.ok ? "ready" : "missing"}
+          </span>
+          <span className="voices-hint" style={{ marginLeft: 8 }}>
+            Voice ID uses your headset mic — enroll on that mic.
           </span>
           <span className={deps.qdrant?.ok ? "dep ok" : "dep bad"}>
             Qdrant {deps.qdrant?.ok ? "ready" : "missing"}
@@ -357,6 +425,44 @@ export default function MeetView({ recorder }: Props) {
                       {transcript.length > 140 ? "…" : ""}
                     </p>
                   )}
+                  {unknownLabels.length > 0 ? (
+                    <div className="voice-enroll" style={{ marginTop: 12 }}>
+                      <select
+                        className="voice-name-input"
+                        value={nameTarget}
+                        onChange={(e) => setNameTarget(e.target.value)}
+                        disabled={naming}
+                      >
+                        <option value="">Name this speaker…</option>
+                        {unknownLabels.map((label) => (
+                          <option key={label} value={label}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className="voice-name-input"
+                        value={nameValue}
+                        onChange={(e) => setNameValue(e.target.value)}
+                        placeholder="Real name"
+                        disabled={naming || !nameTarget}
+                        maxLength={40}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        disabled={
+                          naming || !nameTarget || !nameValue.trim()
+                        }
+                        onClick={() => void nameSpeaker()}
+                      >
+                        {naming ? `Listening… ${nameLeft}s` : "Save voice"}
+                      </button>
+                      {nameHint ? (
+                        <p className="voices-hint">{nameHint}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </div>
 

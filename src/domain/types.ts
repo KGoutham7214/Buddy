@@ -61,11 +61,17 @@ export type VoiceProfile = {
   id: string;
   name: string;
   backend?: string;
+  deviceLabel?: string;
+  channel?: string;
   createdAt: string;
   updatedAt: string;
 };
 
 export type AppMode = "icon" | "panel";
+
+export type PetId = "classic" | "pip";
+
+export type PetMotion = "system" | "reduced";
 
 /** Surface features — desktop sets all true; future clients can disable. */
 export type BuddyCapabilities = {

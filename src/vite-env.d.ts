@@ -26,18 +26,23 @@ export type BuddyApi = {
     mode: AppMode;
     userDataPath: string;
     iconColor?: string;
+    petId?: "classic" | "pip";
+    petMotion?: "system" | "reduced";
     userName?: string;
     openAtLogin?: boolean;
     capabilities: BuddyCapabilities;
   }>;
   setMode: (mode: AppMode) => Promise<AppMode>;
   setIconColor: (id: string) => Promise<string>;
+  setPetId: (id: "classic" | "pip") => Promise<"classic" | "pip">;
+  setPetMotion: (id: "system" | "reduced") => Promise<"system" | "reduced">;
   setUserName: (value: string) => Promise<string>;
   getAutoStart: () => Promise<{ openAtLogin: boolean }>;
   setAutoStart: (enabled: boolean) => Promise<{ openAtLogin: boolean }>;
   dragStart: (payload: { screenX: number; screenY: number }) => void;
   dragMove: (payload: { screenX: number; screenY: number }) => void;
   dragEnd: () => void;
+  resizePanel: (payload: { width: number; height: number }) => void;
   showIconMenu: (payload: {
     phase: "idle" | "recording" | "processing";
     x?: number;
@@ -89,20 +94,37 @@ export type BuddyApi = {
     ollama: { ok: boolean; error?: string; models?: string[] };
     speakers?: { ok: boolean; error?: string; backend?: string };
     qdrant?: { ok: boolean; error?: string };
+    diarization?: { ok: boolean; ready?: boolean; error?: string };
+  }>;
+  downloadDiarization: () => Promise<{
+    ok: boolean;
+    error?: string;
   }>;
   getMeetSettings: () => Promise<{
     ok: boolean;
     whisperModel: string;
+    whisperBeamSize?: number;
     ollamaModel: string;
+    speakerBackend?: string;
+    diarizationBackend?: string;
     whisperModels: string[];
+    whisperBeamSizes?: number[];
+    speakerBackends?: string[];
+    diarizationBackends?: string[];
   }>;
   setMeetSettings: (payload: {
     whisperModel?: string;
+    whisperBeamSize?: number;
     ollamaModel?: string;
+    speakerBackend?: string;
+    diarizationBackend?: string;
   }) => Promise<{
     ok: boolean;
     whisperModel: string;
+    whisperBeamSize?: number;
     ollamaModel: string;
+    speakerBackend?: string;
+    diarizationBackend?: string;
   }>;
   listVoices: () => Promise<VoiceProfile[]>;
   enrollVoice: (payload: {
@@ -110,12 +132,44 @@ export type BuddyApi = {
     pcm?: Uint8Array;
     passes?: Uint8Array[];
     sampleRate?: number;
+    deviceLabel?: string;
+    channel?: string;
   }) => Promise<{ ok: boolean; voice?: VoiceProfile; error?: string }>;
   deleteVoice: (id: string) => Promise<boolean>;
+  clearVoices: () => Promise<{ ok: boolean; deleted?: number; error?: string }>;
   resetSpeakerSession: () => Promise<{ ok: boolean }>;
+  getVoiceSettings: () => Promise<{
+    ok: boolean;
+    speakerBackend: string;
+    backends: string[];
+    speakers?: { ok: boolean; backend?: string; error?: string; models?: string[] };
+  }>;
+  setSpeakerBackend: (backend: string) => Promise<{
+    ok: boolean;
+    speakerBackend?: string;
+    cleared?: boolean;
+    backend?: string;
+    error?: string;
+  }>;
+  nameSpeakerFromClip: (payload: {
+    name: string;
+    fromLabel?: string;
+    noteId?: string;
+    pcm?: Uint8Array;
+    passes?: Uint8Array[];
+    sampleRate?: number;
+    deviceLabel?: string;
+    channel?: string;
+  }) => Promise<{
+    ok: boolean;
+    voice?: VoiceProfile;
+    note?: Note;
+    error?: string;
+  }>;
   identifySpeaker: (payload: {
     pcm: Uint8Array;
     sampleRate?: number;
+    channel?: string;
   }) => Promise<{
     ok: boolean;
     speech?: boolean;
@@ -130,6 +184,7 @@ export type BuddyApi = {
       margin?: number;
       relaxedSingle?: boolean;
       windows?: number;
+      averaged?: number;
     };
     error?: string;
   }>;

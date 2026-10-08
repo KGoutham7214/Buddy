@@ -59,7 +59,8 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--bg1);
+  /* Transparent window: panel and icon tiles paint their own surfaces */
+  background: transparent;
   font-family: var(--font);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -236,6 +237,262 @@ select:focus-visible {
   color: #fff5f5;
 }
 
+.pip {
+  width: 46px;
+  height: 46px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* —— Free-floating pet: no tile, the character stands on the desktop —— */
+.collapsed-root.pet-mode,
+.collapsed-root.pet-mode.recording {
+  background: transparent;
+  animation: none;
+  overflow: visible;
+}
+
+.icon-orb.pet-mode,
+.icon-orb.pet-mode.recording,
+.icon-orb.pet-mode:hover,
+.icon-orb.pet-mode:active {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.icon-orb.pet-mode .pip {
+  /* 2px smaller than the 52px window on each side — the arms, fold, and the
+     hover lift otherwise get clipped by the window edge */
+  width: 48px;
+  height: 48px;
+  transition: transform 160ms var(--ease);
+}
+
+.icon-orb.pet-mode:hover .pip {
+  transform: translateY(-1px) scale(1.04);
+}
+
+.icon-orb.pet-mode:active {
+  transform: none;
+}
+
+.collapsed-root.pet-mode.with-bubble {
+  background: #f4efe6;
+}
+
+.pet-pill {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(24, 18, 12, 0.82);
+  color: #fff;
+  font-size: 9px;
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pet-pill-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e86a6a;
+  animation: pet-pill-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pet-pill-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.panel-resize-grip {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  cursor: nwse-resize;
+  z-index: 60;
+}
+
+.panel-resize-grip:hover {
+  color: var(--text-muted);
+}
+
+.panel-resize-grip svg {
+  width: 10px;
+  height: 10px;
+}
+
+.pip {
+  /* Sand (default) palette; theme classes below retint the note */
+  --pip-outline: #38281a;
+  --pip-paper: #fff3db;
+  --pip-shade: #f3dfb8;
+  --pip-fold: #e8cfa0;
+  --pip-ink: #2e2318;
+  --pip-blush: #f7a8b0;
+}
+
+.icon-orb.color-ocean .pip {
+  --pip-outline: #223a4c;
+  --pip-paper: #e9f3fb;
+  --pip-shade: #d3e5f2;
+  --pip-fold: #b4d2e6;
+  --pip-ink: #1d3140;
+  --pip-blush: #f2a3b4;
+}
+
+.icon-orb.color-sage .pip {
+  --pip-outline: #2c3d27;
+  --pip-paper: #eef6e5;
+  --pip-shade: #dbead0;
+  --pip-fold: #bed8ab;
+  --pip-ink: #25331f;
+  --pip-blush: #f0a3a8;
+}
+
+.icon-orb.color-rose .pip {
+  --pip-outline: #482a34;
+  --pip-paper: #fdeef3;
+  --pip-shade: #f5d7e0;
+  --pip-fold: #e9b9c9;
+  --pip-ink: #3c222b;
+  --pip-blush: #ef93a4;
+}
+
+.pip-outline { fill: var(--pip-outline); }
+.pip-paper { fill: var(--pip-paper); }
+.pip-shade { fill: var(--pip-shade); }
+.pip-fold { fill: var(--pip-fold); }
+.pip-shine { fill: #ffffff; opacity: 0.8; }
+.pip-eye { fill: var(--pip-ink); }
+.pip-glint { fill: #fff; }
+.pip-blush { fill: var(--pip-blush); }
+.pip-stroke {
+  fill: none;
+  stroke: var(--pip-ink);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pip-shadow { fill: rgba(30, 20, 10, 0.2); }
+.pip-pencil-wood { fill: #f2ce60; }
+.pip-pencil-tip { fill: var(--pip-ink); }
+.pip-sweat {
+  fill: #d7eaf6;
+  stroke: var(--pip-ink);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pip-badge-dot { fill: #2f8a52; stroke: #1e5c36; stroke-width: 1; }
+.pip-badge-mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pip .pip-body {
+  transform-box: view-box;
+  transform-origin: 50% 88%;
+  animation: pip-bob 3.2s ease-in-out infinite;
+}
+
+.pip .pip-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pip-blink 4.6s ease-in-out infinite;
+}
+
+.pose-listening .pip-body {
+  animation: pip-sway 1.8s ease-in-out infinite;
+}
+
+.pose-waving .pip-wavearm {
+  transform-box: fill-box;
+  transform-origin: 20% 90%;
+  animation: pip-wave 0.5s ease-in-out 4;
+}
+
+.pose-working .pip-pencil {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pip-scribble 0.6s ease-in-out infinite;
+}
+
+.pose-worried .pip-body,
+.pose-ready .pip-body {
+  animation: none;
+}
+
+.pip-still .pip-body,
+.pip-still .pip-eyes,
+.pip-still .pip-wavearm,
+.pip-still .pip-pencil {
+  animation: none;
+}
+
+.icon-status {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 3px;
+  font-size: 8px;
+  line-height: 1.1;
+  text-align: center;
+  color: #fff5f5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pip .pip-body,
+  .pip .pip-eyes,
+  .pose-listening .pip-body,
+  .pose-waving .pip-wavearm,
+  .pose-working .pip-pencil {
+    animation: none;
+  }
+}
+
+@keyframes pip-bob {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.015, 0.975); }
+}
+@keyframes pip-blink {
+  0%, 88%, 96%, 100% { transform: scaleY(1); }
+  92% { transform: scaleY(0.1); }
+}
+@keyframes pip-sway {
+  0%, 100% { transform: rotate(-1.6deg); }
+  50% { transform: rotate(1.6deg); }
+}
+@keyframes pip-wave {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-24deg); }
+}
+@keyframes pip-scribble {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(-0.8px, 0.6px) rotate(-3deg); }
+}
+
 .icon-rec-time {
   position: absolute;
   bottom: 4px;
@@ -338,6 +595,7 @@ select:focus-visible {
 }
 
 .panel {
+  position: relative;
   width: 100%;
   height: 100%;
   background: var(--bg1);
@@ -675,6 +933,10 @@ select:focus-visible {
 
 .settings-section:first-of-type {
   margin-top: 0;
+}
+
+.settings-label-follow {
+  margin-top: 10px;
 }
 
 .settings-label {
@@ -1052,9 +1314,9 @@ select:focus-visible {
 
 .task-row {
   display: grid;
-  grid-template-columns: 18px 1fr auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   gap: 8px;
-  align-items: center;
+  align-items: start;
   padding: 7px 8px;
   border-radius: var(--radius-sm);
   transition: background 100ms ease;
@@ -1084,7 +1346,7 @@ select:focus-visible {
 .task-checkbox {
   width: 14px;
   height: 14px;
-  margin: 0;
+  margin: 3px 0 0;
   flex-shrink: 0;
   accent-color: var(--brand);
   cursor: pointer;
@@ -1092,11 +1354,20 @@ select:focus-visible {
 
 .task-title {
   width: 100%;
+  min-width: 0;
   border: none;
   outline: none;
+  resize: none;
+  overflow: hidden;
   background: transparent;
+  color: inherit;
+  font: inherit;
   font-size: 12.5px;
-  padding: 2px 0;
+  line-height: 1.4;
+  padding: 1px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  field-sizing: content;
 }
 
 .task-title:focus-visible {
@@ -1107,6 +1378,7 @@ select:focus-visible {
   position: relative;
   display: flex;
   gap: 2px;
+  margin-top: -2px;
   opacity: 0;
   transition: opacity 100ms ease;
 }
